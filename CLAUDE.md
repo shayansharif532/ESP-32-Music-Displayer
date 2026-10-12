@@ -698,3 +698,20 @@ Before starting:
 4. build the custom UI on top of that verified hardware layer
 5. do not begin Spotify integration until the UI prototype is stable
 
+
+
+---
+
+## Known issues / corrections (added by Claude on 2026-10-12, after this file was provided)
+
+These supersede the statements above they contradict.
+
+- **Milestone 1 touch-test crash.** "No boot loops or reset errors observed" describes the *idle* board only. When the touchscreen was
+  exercised, the official-demo + `m1_probe` build crashed and rebooted 4 times (2 memory-access panics, 2 `taskLVGL` stack overflows), always
+  within ~0.25 s of a tap in the demo's top tab-bar band; 8 other taps were fine. Root cause is **not yet established**. Do **not** treat the
+  demo's LVGL/task configuration as "known-good" for touch. In Milestone 2: own the display init (larger LVGL task stack - the esp_lvgl_port
+  default is 7168 B; one draw unit instead of Waveshare's `CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2` unless a soak test proves two are safe; no logging
+  or relabelling inside LVGL-task timer callbacks), and make a multi-minute touch soak test (screen edges, top band, rapid taps; zero resets in
+  the serial log) an acceptance criterion. Evidence, decoded backtraces and candidate causes: `docs/milestones/M1-lcd-touch.md`, "Touch-test addendum".
+- Touch coordinate orientation and corner coverage were not independently verified (no corner taps were recorded).
+- Never assume the serial port or the ESP-IDF location: use `tools\find-board.ps1`; `tools\idf.ps1` and `tools\serial_capture.py` auto-detect both.
