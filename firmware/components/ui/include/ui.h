@@ -37,6 +37,9 @@ void ui_show_idle(const char *line1, const char *line2);
 /* Re-anchor the local progress interpolation (called after every poll / seek). */
 void ui_set_progress(uint32_t progress_ms, bool playing);
 
+/* Dim the controls the current media session does not support (they stay tappable; the session just refuses). */
+void ui_set_capabilities(bool can_prev, bool can_next, bool can_seek);
+
 /* Album art: 16-bit RGB565 image descriptor, or NULL for the placeholder. The pixel buffer must stay valid
  * until another ui_set_art() call has returned. */
 void ui_set_art(const lv_image_dsc_t *dsc);

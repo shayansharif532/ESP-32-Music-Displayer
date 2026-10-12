@@ -14,14 +14,14 @@ DEFAULT_PORT = 8765
 DEFAULT_DISCOVERY_PORT = 8766
 
 
-def _setup_logging(console: bool) -> str:
+def _setup_logging(console: bool, debug: bool = False) -> str:
     base = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "DeskMediaCompanion")
     os.makedirs(base, exist_ok=True)
     path = os.path.join(base, "companion.log")
     handlers: list[logging.Handler] = [logging.handlers.RotatingFileHandler(path, maxBytes=512_000, backupCount=2, encoding="utf-8")]
     if console and sys.stderr is not None:
         handlers.append(logging.StreamHandler(sys.stderr))
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=handlers)
+    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=handlers)
     return path
 
 
@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-discovery", action="store_true", help="do not broadcast the discovery beacon")
     ap.add_argument("--console", action="store_true", help="also log to the console")
     ap.add_argument("--quiet", action="store_true", help="background mode (used by auto-start): file log only")
+    ap.add_argument("--debug", action="store_true", help="verbose log (every HTTP request)")
     ap.add_argument("--probe", action="store_true", help="print the current media state once and exit")
     ap.add_argument("--install-startup", action="store_true", help="start automatically when you log in to Windows")
     ap.add_argument("--remove-startup", action="store_true", help="undo --install-startup")
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Auto-start removed." if autostart.remove() else "Auto-start was not installed.")
         return 0
 
-    log_path = _setup_logging(console=args.console or args.probe)
+    log_path = _setup_logging(console=args.console or args.probe, debug=args.debug)
     log = logging.getLogger("main")
 
     from .media import MediaMonitor

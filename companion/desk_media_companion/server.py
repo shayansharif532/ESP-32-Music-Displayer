@@ -40,6 +40,7 @@ def make_server(monitor: MediaMonitor, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "DeskMediaCompanion/" + __version__
+        timeout = 30        # drop idle keep-alive connections (e.g. after the display's Wi-Fi dropped) instead of leaking a thread each
 
         # -- plumbing ------------------------------------------------------------------------
         def log_message(self, fmt, *args):          # silence the default per-request stderr line

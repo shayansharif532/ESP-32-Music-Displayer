@@ -22,6 +22,8 @@ The owner replaced the Spotify Web API plan with a Windows media-session compani
 | **Now-playing + artwork** (M5/M6) | board logged the track, then "artwork ready (300x300, 8,973 bytes JPEG) in 135 ms"; later 17,480 bytes in 160 ms (YouTube) |
 | Session switching | board followed fake session -> YouTube -> fake session as the playing session changed, re-fetching artwork each time |
 | Stability | 3+ minutes on the network build: no reset, no panic, LVGL stack minimum free 20,156 B of 24,576 B, internal RAM free ~158 KB (min 117 KB), PSRAM free ~5.9 MB |
+| Bug found + fixed during testing | a `play` command reached a stale session (`PSExpressCore.exe`) instead of the one on screen; controls now use exactly the session the display shows (`MediaMonitor._select`). Re-tested: `play` -> `claude.exe` (YouTube) |
+| Board keeps working unattended | after several minutes with no serial reader the board was still polling the companion once per second (seen in the companion's debug log) and re-attached to a restarted companion by itself |
 | Packaged exe | `DeskMediaCompanion.exe` (windowed, no console) answered `/health`, `/now-playing`, `/artwork` correctly on a spare port |
 
 ## NOT yet verified (needs the owner / real media)
@@ -34,6 +36,7 @@ The owner replaced the Spotify Web API plan with a Windows media-session compani
 
 ## Known issues / limits
 
+* **Dev-only:** after a long period with *no* serial reader attached (or a reader that stalls), the board's USB-Serial/JTAG console output can stop until the next reset. The firmware itself keeps running (verified by the companion log). Keep `serial_capture.py` attached - and use `--reset` - when you need logs; this does not affect normal use.
 * Fonts: Montserrat has no CJK / Cyrillic / emoji glyphs - such titles render with missing characters (many YouTube titles). Needs a fallback font (polish milestone).
 * `can_next` / `can_prev` are reported but the UI does not dim the buttons yet.
 * Single companion, no pairing: any device on the LAN could press the buttons (fenced as described in ARCHITECTURE.md). Pairing token planned for Milestone 11.

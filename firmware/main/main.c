@@ -112,6 +112,7 @@ static void on_state(const pc_media_state_t *st, void *ctx)
         s_idle_shown = false;
     }
     ui_set_progress(st->position_ms, st->playing);
+    ui_set_capabilities(st->can_prev, st->can_next, st->can_seek);
 }
 
 static void on_art(const lv_image_dsc_t *dsc, void *ctx)

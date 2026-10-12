@@ -358,6 +358,9 @@ void ui_show_idle(const char *line1, const char *line2)
     set_play_icon(false);
     lv_obj_add_flag(s.art_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s.art_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(s.btn_prev, LV_OPA_40, 0);        /* nothing to control */
+    lv_obj_set_style_opa(s.btn_next, LV_OPA_40, 0);
+    lv_obj_set_style_opa(s.slider, LV_OPA_50, 0);
     bsp_display_unlock();
 }
 
@@ -374,6 +377,22 @@ void ui_set_progress(uint32_t progress_ms, bool playing)
         apply_slider(current_pos_ms());
         set_elapsed_label(current_pos_ms());
     }
+    bsp_display_unlock();
+}
+
+static void apply_caps(bool can_prev, bool can_next, bool can_seek)
+{
+    lv_obj_set_style_opa(s.btn_prev, can_prev ? LV_OPA_COVER : LV_OPA_40, 0);
+    lv_obj_set_style_opa(s.btn_next, can_next ? LV_OPA_COVER : LV_OPA_40, 0);
+    lv_obj_set_style_opa(s.slider, can_seek ? LV_OPA_COVER : LV_OPA_50, 0);
+}
+
+void ui_set_capabilities(bool can_prev, bool can_next, bool can_seek)
+{
+    if (!s.ready || !bsp_display_lock(1000)) {
+        return;
+    }
+    apply_caps(can_prev, can_next, can_seek && s.duration_ms > 0);
     bsp_display_unlock();
 }
 

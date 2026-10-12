@@ -151,16 +151,25 @@ class MediaMonitor:
         return ordered
 
     # ---- snapshot -------------------------------------------------------------------------------
-    async def _snapshot(self) -> dict[str, Any]:
+    async def _select(self):
+        """The session shown on the display AND controlled by the buttons: the first candidate that answers.
+        Returns (session, media properties, playback info, timeline) or None. Dead / not-ready sessions are skipped."""
         mgr = await self._get_manager()
         for session in self._candidates(mgr):
             try:
                 props = await session.try_get_media_properties_async()
                 info = session.get_playback_info()
                 tl = session.get_timeline_properties()
-            except Exception as exc:                  # dead / not-ready sessions are skipped
+            except Exception as exc:
                 log.debug("skipping session %s: %s", getattr(session, "source_app_user_model_id", "?"), exc)
                 continue
+            return session, props, info, tl
+        return None
+
+    async def _snapshot(self) -> dict[str, Any]:
+        selected = await self._select()
+        if selected is not None:
+            session, props, info, tl = selected
 
             app = session.source_app_user_model_id or ""
             status = info.playback_status
@@ -268,10 +277,12 @@ class MediaMonitor:
 
     # ---- controls -------------------------------------------------------------------------------
     async def _control(self, action: str, position_ms: Optional[int]) -> dict[str, Any]:
-        mgr = await self._get_manager()
-        for session in self._candidates(mgr):
+        selected = await self._select()               # the very session the display is showing
+        if selected is None:
+            return {"ok": False, "action": action, "error": "no media session"}
+        session, _props, info, _tl = selected
+        for _once in (0,):
             try:
-                info = session.get_playback_info()
                 ctl = info.controls
                 playing = info.playback_status == PlaybackStatus.PLAYING
                 if action == "playpause":
@@ -299,8 +310,8 @@ class MediaMonitor:
                 log.info("control %s on %s -> %s", action, session.source_app_user_model_id, "ok" if ok else "refused")
                 return {"ok": bool(ok), "action": action, "app": session.source_app_user_model_id}
             except Exception as exc:
-                log.debug("control on a session failed: %s", exc)
-                continue
+                log.warning("control %s on %s failed: %s", action, session.source_app_user_model_id, exc)
+                return {"ok": False, "action": action, "error": str(exc)[:120]}
         return {"ok": False, "action": action, "error": "no media session"}
 
 
