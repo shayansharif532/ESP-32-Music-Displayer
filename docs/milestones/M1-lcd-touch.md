@@ -3,6 +3,11 @@
 Goal: build Waveshare's official LVGL demo for *this* board, flash it, confirm LCD + touch, watch the serial console.
 Date: 2026-10-11. Board: ESP32-S3-Touch-LCD-4B on `COM5` (native USB-Serial/JTAG). Scope limited to Milestone 1 by the owner.
 
+**Status (updated 2026-10-12): display OK (owner-confirmed); touch input works; BUT the demo + sidecar build crashed on touches
+in the demo's top tab-bar area — see [Touch-test addendum](#touch-test-addendum-2026-10-12). Open item for the start of Milestone 2.**
+The "boots cleanly, no resets" statements below describe the *idle* board (100 s+ of observation) and remain true; they do not cover
+touch interaction.
+
 ## What was done
 
 | Step | Result |
@@ -62,3 +67,45 @@ PSRAM free **6,896,136 B** — all flat, i.e. no leaks, no resets, no errors, no
 * Console on native USB needs DTR; reset/boot-mode selection is via RTS/DTR edges; see README "Notes learned the hard way".
 * Windows PowerShell shell guard: scripts must not `Remove-Item "$var\file"` with an unresolved variable (blocked as a system-path delete) —
   use unique log names instead.
+
+## Touch-test addendum (2026-10-12)
+
+While the owner exercised the touchscreen, a read-only serial listener (`tools/serial_capture.py`, started 23:53 on 2026-10-11)
+recorded the session. The build on the board was **official demo + `m1_probe` sidecar** (the pristine `-DM1_PROBE=0` build was
+never touched by a finger, so it has **not** been observed under touch).
+
+**Touch input works.** 46 events (12 presses, 25 drag samples, 9 releases) over a 27 s window; reported x spans 103–414 and
+y spans 7–319 (of 0–479); drags produce smooth monotonic paths (e.g. (136,319) -> (192,131)). *Not proven:* corner coverage / axis orientation — no
+corner touches were recorded; the owner reports the rendered display looks correct (CLAUDE.md, 2026-10-12).
+
+**The board crashed on touches in the top tab-bar band.** 4 of the 12 presses were followed within 0.1–0.25 s by a crash + automatic reboot
+(`rst:0xc RTC_SW_CPU_RST`); all 4 were in the top 16 px at x = 248–308 (the widgets demo's tab buttons). The 8 other presses — including
+(222,24) and (414,9) and everything lower on the screen — did not crash.
+
+| # | Listener time | Press | Crash |
+|---|---|---|---|
+| 1 | +1235.8 s | (264, 7) | `Guru Meditation Error: Core 0 panic'ed (StoreProhibited)`, EXCVADDR 0x000609e0 |
+| 2 | +1239.6 s | (264,16), 0.2 s after a reboot | `Core 1 panic'ed (LoadProhibited)`, EXCVADDR 0x00000008; Core 0 shows the same state as #1 |
+| 3 | +1244.5 s | (308,11) | `***ERROR*** A stack overflow in task taskLVGL has been detected` |
+| 4 | +1251.3 s | (248,15) | `***ERROR*** A stack overflow in task taskLVGL has been detected` |
+
+Backtraces decoded against the exact ELF (`xtensa-esp32s3-elf-addr2line`, ELF SHA-256 prefix `74a836b17`):
+
+* #1 / core 0 of #2: `vPortYieldFromInt` <- `_frxt_int_exit` (FreeRTOS interrupt-exit context switch) — typical symptom of a corrupted task stack/TCB.
+* #2 / core 1: `xTaskGenericNotify` <- `lv_thread_sync_signal` <- `lv_draw_dispatch_request` <- `render_thread_cb` <- `prvRunThread`
+  (`lv_freertos.c:293`, `lv_draw.c:312`, `lv_draw_sw.c:374`): **LVGL's second software-render thread**.
+* #3 / #4: `vApplicationStackOverflowHook` <- `vTaskSwitchContext` (canary check, `CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y`).
+
+Relevant configuration: Waveshare's defaults set `CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2` (LVGL renders on two threads) and `esp_lvgl_port` 2.9.0's
+`ESP_LVGL_PORT_INIT_CONFIG()` gives `taskLVGL` a **7168-byte** stack in internal RAM; `CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584`.
+
+**Root cause: not yet established.** Candidates, most to least likely: (a) the demo's tab-switch animation + shadows need more than 7 KB of
+LVGL-task stack, made worse by the sidecar logging and relabelling inside LVGL timers (they run on `taskLVGL`); (b) a race in LVGL 9.5's
+two-thread software renderer with FreeRTOS notifications; (c) something specific to the official BSP's touch/LCD glue.
+Not yet run (needs a flash, so deliberately not done during the GitHub-sync task): flash the pristine build and hammer the top band;
+rebuild with `CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=1`; rebuild with a larger LVGL task stack.
+
+**Consequence for Milestone 2.** Our own `display` layer must not inherit the demo's settings blindly: start LVGL through
+`bsp_display_start_with_config()` (or our own init) with a larger `task_stack` (16 KB class), prefer one draw unit unless a soak test proves two are safe,
+keep logging out of LVGL-task callbacks, and make a **touch soak test an acceptance criterion** (tap everywhere including the screen edges and
+the top band, and rapid repeated taps, for several minutes with zero resets in the serial log).
