@@ -1,0 +1,10 @@
+# Stand-alone flashing / backup tooling (independent of the ESP-IDF install, so the
+# factory restore path keeps working even if the build toolchain is broken).
+#
+#   python -m venv tools\venv
+#   tools\venv\Scripts\python.exe -m pip install -r tools\requirements.txt
+#
+esptool==5.5.0
+pyserial==3.5
+# bitstring 5.x removed BitStream, which espefuse (part of esptool) imports.
+bitstring>=4.2.0,<5

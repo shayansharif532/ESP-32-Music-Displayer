@@ -1,0 +1,24 @@
+# --- local toolchains / virtualenvs -----------------------------------------
+tools/venv/
+.espressif/
+.cache/
+
+# --- build output ------------------------------------------------------------
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+
+# --- vendor downloads (large, third-party licensed; see docs/HARDWARE.md#sources) ---
+docs/waveshare/
+
+# --- the factory flash dump: 16 MiB, device specific, may contain Wi-Fi data of
+#     whoever used the board before. Keep it OUT of git (and out of any public
+#     repo) but DO copy it somewhere safe. Its hashes live in backup/factory/MANIFEST.md.
+backup/factory/*.bin
+backup/**/*.bin
+
+# --- secrets: nothing secret is ever compiled in, but just in case ----------
+secrets.*
+*.secret
+.env
