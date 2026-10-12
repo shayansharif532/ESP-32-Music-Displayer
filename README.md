@@ -17,7 +17,7 @@ obsolete; its code is parked in [`legacy/`](legacy/README.md).)
 | **Board support** | Waveshare BSP **`waveshare/esp32_s3_touch_lcd_4b` 2.0.0** (with `esp_lcd_st7701` 2.0.3, `esp_lcd_touch_gt911` 1.2.1) — every version is pinned in [`firmware/dependencies.lock`](firmware/dependencies.lock) |
 | **Windows companion** | Python 3.12 + `winrt-*` (Windows.Media.Control) + Pillow + psutil + pycaw/comtypes (per-app volume) — [`companion/`](companion/) (single `.exe` for the recipient: Milestone 12) |
 | **Dev host** | Windows 10/11, PowerShell 5.1 (the tested path). Linux/macOS: see the note below (untested, firmware only) |
-| **Repository** | <https://github.com/shayansharif532/ESP-32-Spotify> (private) |
+| **Repository** | <https://github.com/shayansharif532/ESP-32-Spotify> (public since 2026-10-12) |
 
 > **Status (2026-10-12):** the architecture was changed to the Windows companion (ADR-003) and the **MVP works**: Spotify desktop and YouTube/other
 > media in Chrome show real artwork, title, artist/channel and progress on the display, and play/pause/next/previous work from the touchscreen

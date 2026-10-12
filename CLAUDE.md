@@ -553,7 +553,9 @@ Experimental work may use feature branches.
 
 ## GitHub / Continue-Anywhere Requirements
 
-The remote repository should preferably be **private** while development is active.
+The remote repository was private during early development and **became public on 2026-10-12** (owner's decision). Everything committed - and the whole history - is therefore world-readable:
+never commit Wi-Fi credentials, pairing tokens, the factory flash image, logs, device screenshots of the owner's real media or any third-party artwork (all committed images are synthetic; `firmware/secrets.local.h`, `backup/*.bin`, `logs/` stay git-ignored).
+An audit on that day found no secrets, credentials, factory binaries or third-party artwork in the tree or in the history. Known harmless identifiers in the docs: the board's MAC address and private LAN addresses; the commit author e-mail is the owner's.
 
 After cloning on another computer:
 
