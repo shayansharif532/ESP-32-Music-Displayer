@@ -19,16 +19,15 @@ obsolete; its code is parked in [`legacy/`](legacy/README.md).)
 | **Dev host** | Windows 10/11, PowerShell 5.1 (the tested path). Linux/macOS: see the note below (untested, firmware only) |
 | **Repository** | <https://github.com/shayansharif532/ESP-32-Spotify> (private) |
 
-> **Status (2026-10-12):** the architecture was changed to the Windows companion (ADR-003). The companion, the ESP32 client, Wi-Fi and the
-> custom 480x480 UI exist and have been tested together end to end against a *test* media session (title, artwork, progress, discovery,
-> commands) — see the latest file in [docs/milestones/](docs/milestones/) for what is verified and what is still open (real Spotify-desktop /
-> YouTube tests, a long touch soak). Work in progress lives on branch `feature/mvp`; `main` is the last known-good state.
+> **Status (2026-10-12):** the architecture was changed to the Windows companion (ADR-003) and the **MVP works**: Spotify desktop and YouTube/other
+> media in Chrome show real artwork, title, artist/channel and progress on the display, and play/pause/next/previous work from the touchscreen
+> (24 real touches, no reset). Evidence and the few open points: [docs/milestones/MVP-media-companion.md](docs/milestones/MVP-media-companion.md).
 
 ## Start here (new computer or new Claude Code session)
 
 1. Read [`CLAUDE.md`](CLAUDE.md) — the authoritative project orientation (hardware, rules, milestone plan, flashing safety).
 2. Read this README, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), then the latest file in [`docs/milestones/`](docs/milestones/).
-3. `git status` and `git log --oneline -10`, then continue from the latest *completed* milestone (check `feature/mvp` as well as `main`).
+3. `git status` and `git log --oneline -10`, then continue from the latest *completed* milestone.
 4. Never assume the COM port (`tools\find-board.ps1`) or the ESP-IDF location (`tools\idf.ps1` discovers it).
 
 ## Where things live
@@ -56,7 +55,6 @@ Prerequisites: Windows 10/11 with `winget` (App Installer), Git and Python 3.12+
 # 1. Clone (private repo: Git Credential Manager opens a browser sign-in on first use) and look around
 git clone https://github.com/shayansharif532/ESP-32-Spotify.git
 cd ESP-32-Spotify
-git switch feature/mvp                      # work in progress; omit to stay on main
 git status ; git log --oneline -10
 
 # 2. ESP-IDF 5.5.5 for the ESP32-S3 via Espressif's installer (~8 GB, ~10 min; tools\eim_config.toml records the original options)
@@ -172,13 +170,13 @@ stored Wi-Fi/pairing and re-enters setup.)*
 |---|---|---|
 | 0 | Detect board, confirm hardware, find official docs, choose framework, **back up factory flash** | **done** |
 | 1 | Flash an official Waveshare LCD + touch example; confirm display and touch | **done** (the touch-crash finding is addressed by the M2 display config; see the M1 addendum) |
-| 2 | Own 480x480 UI (placeholder art, title, artist, progress, prev/play/next, art toggle) | **built + boots**; a long touch soak is still owed ([M2 doc](docs/milestones/M2-ui.md)) |
-| 3 | Wi-Fi connection + automatic reconnect | firmware done; hardware results in the [MVP doc](docs/milestones/MVP-media-companion.md) |
-| 4 | **Windows companion** (media session -> LAN HTTP API) *(was: HTTPS test)* | built, tested against a test media session |
-| 5 | **ESP32 <-> companion**: discovery, now-playing, progress *(was: Spotify OAuth)* | working on hardware against a test session |
-| 6 | Real artwork (companion-normalised JPEG) | working on hardware against a test session |
-| 7 | Play / pause / previous / next (+ seek) through the media session | wired; hardware tap test: see MVP doc |
-| — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | pending (needs real media on the owner's PC) |
+| 2 | Own 480x480 UI (placeholder art, title, artist, progress, prev/play/next, art toggle) | **done** - 24 touches / 941 s, no reset ([M2 doc](docs/milestones/M2-ui.md)); a targeted stress soak is still advisable |
+| 3 | Wi-Fi connection + automatic reconnect | **done** - drop recovered in 2.05 s ([MVP doc](docs/milestones/MVP-media-companion.md)) |
+| 4 | **Windows companion** (media session -> LAN HTTP API) *(was: HTTPS test)* | **done** - tested with a fake session, YouTube, Spotify desktop, Chrome |
+| 5 | **ESP32 <-> companion**: discovery, now-playing, progress *(was: Spotify OAuth)* | **done** on hardware |
+| 6 | Real artwork (companion-normalised JPEG) | **done** on hardware (110-177 ms per image) |
+| 7 | Play / pause / previous / next (+ seek) through the media session | **done** for play/pause/next/previous (real taps, Spotify + Chrome); seek wired, not yet seen in a log |
+| — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | **passed by log evidence** (owner's visual confirmation of the screen still to be given) |
 | 8 | Polished UI + full-screen art | |
 | 9 | Cyberpunk idle screen | |
 | 10 | Birthday intro | |
@@ -187,7 +185,7 @@ stored Wi-Fi/pairing and re-enters setup.)*
 
 ## Git workflow
 
-`main` holds the latest known-good, bootable state; risky or unverified work goes on a branch (currently `feature/mvp`). Commit after each
+`main` holds the latest known-good, bootable state; risky or unverified work goes on a branch (`feature/mvp` was merged into `main` at the MVP). Commit after each
 verified milestone or stable checkpoint — see [`CLAUDE.md`](CLAUDE.md) for the commit and testing rules.
 
 ## Repository layout

@@ -67,8 +67,8 @@ Base: `http://<pc-ip>:8765` (port configurable). All JSON is UTF-8.
 the track changes), `art_id` (changes when the artwork changes; `""` = none), `can_play`, `can_pause`, `can_next`, `can_prev`,
 `can_seek`, `seq` (bumps on any visible change).
 
-Session choice: the playing session wins (the system's current session if it is playing); otherwise the current session; broken
-sessions are skipped. Commands go to the same choice.
+Session choice: the playing session wins (the system's current session if it is playing); otherwise the app that played last; otherwise the
+system's current session; broken sessions are skipped. Commands go to exactly the session being shown.
 
 **Discovery:** the companion broadcasts `DESKMEDIA1 {"port":8765,"name":"<pc name>"}` on UDP **8766** every 2 s from each real LAN
 interface (VPN / virtual adapters skipped). The display uses the packet's source address as the PC's IP. `DEV_COMPANION_HOST` in

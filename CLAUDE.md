@@ -164,13 +164,13 @@ Completed:
 Before assuming touch calibration is perfect on another build, preserve or rerun the touch diagnostic if needed.
 (See "Known issues" at the end: the M1 demo crashed on some touches. The M2 display config - 24 KB LVGL stack, one draw unit - is our answer; a pristine-demo gate on 2026-10-12 ran 7 minutes without a crash.)
 
-### Milestone 2 - BUILT, boots; long touch soak still owed
+### Milestone 2 - DONE (24 real touches over 941 s on the network build, no reset)
 
 Own 480x480 UI in `firmware/components/ui` (placeholder art box, title, artist, seek bar, elapsed/total, prev/play-pause/next, tap-art full-screen toggle, status line). Evidence: `docs/milestones/M2-ui.md`.
 
-### Milestones 3-7 - BUILT on branch `feature/mvp`, tested end to end against a *test* media session
+### Milestones 3-7 + MVP gate - DONE (merged to `main`)
 
-Wi-Fi + auto-reconnect (verified: link dropped and recovered in ~2 s), the Windows companion, discovery, now-playing, artwork, commands. Evidence: `docs/milestones/MVP-media-companion.md`. **Still pending: the MVP gate with real Spotify desktop and YouTube-in-a-browser playback.**
+Wi-Fi + auto-reconnect (link dropped and recovered in ~2 s), the Windows companion, discovery, now-playing, artwork, commands. Verified with real Spotify desktop and Chrome (YouTube etc.) plus 24 physical touches. Evidence and open points: `docs/milestones/MVP-media-companion.md`. The owner has not yet given a visual confirmation of the screen - do not claim the layout is visually verified until they do.
 
 ---
 
@@ -623,12 +623,12 @@ They may be future enhancements, but they must not delay the core music-display 
 
 ## Immediate Next Task
 
-State on 2026-10-12: milestones 2-7 are built on `feature/mvp` and work end to end against a test media session. Next:
+State on 2026-10-12: the MVP works and is merged into `main` (see `docs/milestones/MVP-media-companion.md`). Next, in this order:
 
-1. Run the **MVP gate** with real media: Spotify desktop and YouTube in Chrome/Edge (artwork, title/artist, progress, play/pause, next/previous).
-2. A long **touch soak** on the network build (screen edges, rapid taps, seek drags; zero resets; the health line's `touches=` counter).
-3. Merge `feature/mvp` into `main` once 1 and 2 pass; write `docs/milestones/MVP-media-companion.md` results.
-4. Then M8 (polish + full-screen art), M9, M10, M11, M12 in that order.
+1. Get the owner's visual feedback on the screen (layout, colours, long titles, letterboxed art) and fix what they point out.
+2. M8 polish: full-screen art, fallback font for non-Latin titles (many YouTube titles), nicer idle/no-session state.
+3. M9 Cyberpunk idle screen, M10 birthday intro (needs the recipient's name), M11 first-run Wi-Fi setup + companion pairing token, M12 companion installer/auto-start/firewall helper.
+4. A targeted touch stress soak (top band, edges, rapid taps) before the product is finalised.
 
 Before starting: `git status`, `git log --oneline -10`, read `docs/ARCHITECTURE.md` and the latest milestone doc.
 

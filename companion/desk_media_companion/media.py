@@ -61,6 +61,7 @@ class MediaMonitor:
         self._art_last_try = 0.0
         self._seq = 0
         self._last_sig = ""
+        self._last_playing_app = ""      # when everything is paused, stay on the app that was playing last
 
     # ---- lifecycle ------------------------------------------------------------------------------
     def start(self) -> None:
@@ -145,6 +146,10 @@ class MediaMonitor:
         for s in sessions:
             if self._status(s) == PlaybackStatus.PLAYING:
                 add(s)
+        if self._last_playing_app:
+            for s in sessions:
+                if s.source_app_user_model_id == self._last_playing_app:
+                    add(s)
         add(current)
         for s in sessions:
             add(s)
@@ -174,6 +179,8 @@ class MediaMonitor:
             app = session.source_app_user_model_id or ""
             status = info.playback_status
             state = STATE_NAMES.get(status, "unknown")
+            if status == PlaybackStatus.PLAYING:
+                self._last_playing_app = app
             title = props.title or ""
             artist = props.artist or props.album_artist or props.subtitle or ""
             album = props.album_title or ""

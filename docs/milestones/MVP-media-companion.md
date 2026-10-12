@@ -26,7 +26,27 @@ The owner replaced the Spotify Web API plan with a Windows media-session compani
 | Board keeps working unattended | after several minutes with no serial reader the board was still polling the companion once per second (seen in the companion's debug log) and re-attached to a restarted companion by itself |
 | Packaged exe | `DeskMediaCompanion.exe` (windowed, no console) answered `/health`, `/now-playing`, `/artwork` correctly on a spare port |
 
-## NOT yet verified (needs the owner / real media)
+## Owner test with real media (2026-10-12, 15-minute serial log `mvp-soak-final.log`, read by Claude afterwards)
+
+The owner tapped the board and played real media while a serial reader was attached. From the log (not from looking at the screen):
+
+| Check | Result |
+|---|---|
+| Physical touches | **24 presses**, zero resets / panics / stack overflows in 941 s (90 health lines); LVGL stack minimum free 20,188 B; internal RAM min 119 KB, flat; PSRAM free flat at 5.9 MB |
+| **Spotify desktop** (`Spotify.exe`) | recognised: tracks, ads ("Apply now for grades K-6!"), artwork on every change (110-177 ms), play/pause + next executed (`control ... on Spotify.exe -> ok` in the companion log) |
+| **YouTube / YouTube Music in Chrome** (`chrome.exe`) | recognised: titles + channel/artist, artwork, play/pause + next ok |
+| Controls from the board | `/control/playpause` x14, `/control/next` x8 ok; `previous` and `next` on a single YouTube video correctly reported `ok:false` ("refused") and the UI stayed consistent |
+| Session switching | followed Chrome <-> Spotify <-> embedded browser as the playing session changed |
+
+Observed and handled afterwards: when everything is paused the display once jumped to a stray `Riot Client.exe` session -> the companion now prefers the app that played last.
+
+## Not yet confirmed
+
+1. **Visual check by the owner**: layout, colours, letterboxed 16:9 art, scrolling long titles - the logs prove the data path, not how it looks. No problem has been reported.
+2. **Seek by dragging the bar** and the **art tap / full-screen toggle** are not distinguishable in the log (no command is logged for the toggle; no `seek` command appears in this log).
+3. **Windows Firewall on the recipient's PC** (fine on the dev PC).
+
+## (earlier list, kept for history) NOT yet verified before the owner test
 
 1. **Touch on the network build**: taps on prev / play-pause / next / seek / art-toggle. The command path (UI -> `pc_media_command` -> companion -> session) is proven
    by curl and by the firmware code, but no physical tap has been logged yet (`touches=0` in every health line so far). A multi-minute touch soak is also still owed (M2 acceptance).

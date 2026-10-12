@@ -35,7 +35,13 @@ Our config keeps the safer settings regardless (large stack, one draw unit, no o
 - LVGL task stack minimum free 20,244 B of 24,576 B
 - 10 minutes (`logs/m2-soak.log`): heap numbers flat, no reset, no panic
 
-## Touch soak - status
+## Touch soak - status (updated: owner test on the network build, 2026-10-12)
+
+**24 physical touch presses over a 941 s run on the network build, zero resets** (`logs/mvp-soak-final.log`; counter in the health line).
+That is a first real soak of our own display config; it was not a deliberate "hammer the top band" stress test, so a longer targeted soak is still
+worth doing before the product is finalised.
+
+### Earlier status (before that test)
 
 The serial soak recorded 10 minutes with **only 2 touch presses**: the heap/stack numbers are flat and nothing reset, but it is **not yet a
 real touch soak** (it needs several minutes of varied taps: top band, edges, rapid taps, slider drags, art toggle). To be repeated on the
