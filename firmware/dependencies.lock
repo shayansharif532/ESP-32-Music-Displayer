@@ -182,6 +182,6 @@ direct_dependencies:
 - espressif/esp_jpeg
 - lvgl/lvgl
 - waveshare/esp32_s3_touch_lcd_4b
-manifest_hash: cd04e067321228471a4746b24fc60a6a50fa2f1bc2a472486c3fe852934d5bd7
+manifest_hash: 38d0ef1569e5bdd211465c58df5dc0938bf28a21c3131e16f43b7efd25fc939e
 target: esp32s3
 version: 2.0.0

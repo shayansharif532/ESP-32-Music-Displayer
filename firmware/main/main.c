@@ -1,8 +1,8 @@
 /*
- * Spotify desk display - application entry point and glue.
+ * Desk media display - application entry point and glue.
  *
- *   wifi_mgr  -> network + clock            spotify -> auth, playback polling, commands, album art
- *   ui        -> LVGL Now Playing screen    this file -> turns Spotify/Wi-Fi events into UI calls and UI taps into commands
+ *   wifi_mgr  -> network                      pc_media -> finds the Windows companion, polls now-playing, artwork, controls
+ *   ui        -> LVGL Now Playing screen      this file -> turns media/Wi-Fi events into UI calls and UI taps into commands
  *
  * Without developer credentials in firmware/secrets.local.h the firmware runs the UI-only demo player instead.
  * The display/LVGL start-up is owned here (instead of the stock bsp_display_start()) so the LVGL task gets a
@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -23,52 +24,64 @@
 #include "app_config.h"
 #include "demo_player.h"
 #include "health.h"
-#include "net_selftest.h"
-#include "spotify.h"
+#include "pc_media.h"
 #include "ui.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "app";
 
-/* ---- UI taps -> Spotify commands (runs on the LVGL task: only queues, never blocks) -------------- */
+/* ---- UI taps -> companion commands (runs on the LVGL task: only queues, never blocks) ----------------- */
 
 static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
 {
     (void)ctx;
     switch (cmd) {
-    case UI_CMD_PREV:       spotify_command(SPOTIFY_CMD_PREV, 0); break;
-    case UI_CMD_PLAY_PAUSE: spotify_command(SPOTIFY_CMD_PLAY_PAUSE, 0); break;
-    case UI_CMD_NEXT:       spotify_command(SPOTIFY_CMD_NEXT, 0); break;
-    case UI_CMD_SEEK:       spotify_command(SPOTIFY_CMD_SEEK, arg); break;
+    case UI_CMD_PREV:       pc_media_command(PC_MEDIA_CMD_PREV, 0); break;
+    case UI_CMD_PLAY_PAUSE: pc_media_command(PC_MEDIA_CMD_PLAY_PAUSE, 0); break;
+    case UI_CMD_NEXT:       pc_media_command(PC_MEDIA_CMD_NEXT, 0); break;
+    case UI_CMD_SEEK:       pc_media_command(PC_MEDIA_CMD_SEEK, arg); break;
     }
 }
 
-/* ---- Spotify events -> UI (called from the Spotify task) ------------------------------------------ */
+/* ---- companion events -> UI (called from the pc_media poll task) ----------------------------------------- */
 
-static char s_shown_track[40];       /* track id currently on screen, "" = idle screen */
+static char s_shown_track[16];       /* track id currently on screen, "" = idle screen */
 static bool s_idle_shown;
+static char s_source[32];            /* friendly name of the app that is playing, shown in the status line */
 
-static void on_playback(const spotify_playback_t *pb, void *ctx)
+static bool ci_contains(const char *hay, const char *needle)
 {
-    (void)ctx;
-    if (pb->has_item) {
-        if (strcmp(pb->track_id, s_shown_track) != 0 || s_idle_shown) {
-            ui_show_track(pb->title, pb->artist, pb->duration_ms);
-            strlcpy(s_shown_track, pb->track_id, sizeof s_shown_track);
-            s_idle_shown = false;
+    size_t n = strlen(needle);
+    for (; *hay; hay++) {
+        size_t i = 0;
+        while (i < n && hay[i] && ((hay[i] | 0x20) == (needle[i] | 0x20))) {
+            i++;
         }
-        ui_set_progress(pb->progress_ms, pb->is_playing);
-    } else if (!s_idle_shown) {
-        s_shown_track[0] = '\0';
-        s_idle_shown = true;
-        ui_show_idle("Nothing playing", "Start Spotify on any device");
+        if (i == n) {
+            return true;
+        }
     }
+    return false;
 }
 
-static void on_art(const lv_image_dsc_t *dsc, void *ctx)
+static void friendly_source(const char *app, char *out, size_t n)
 {
-    (void)ctx;
-    ui_set_art(dsc);
+    static const struct { const char *needle, *name; } MAP[] = {
+        { "spotify", "Spotify" }, { "chrome", "Chrome" }, { "msedge", "Edge" }, { "edge", "Edge" }, { "firefox", "Firefox" },
+        { "brave", "Brave" }, { "opera", "Opera" }, { "vlc", "VLC" }, { "applemusic", "Apple Music" }, { "itunes", "Apple Music" },
+        { "zunemusic", "Media Player" }, { "wmplayer", "Media Player" }, { "youtube", "YouTube" },
+    };
+    for (size_t i = 0; i < sizeof MAP / sizeof MAP[0]; i++) {
+        if (ci_contains(app, MAP[i].needle)) {
+            strlcpy(out, MAP[i].name, n);
+            return;
+        }
+    }
+    strlcpy(out, app, n);
+    char *dot = strrchr(out, '.');
+    if (dot && strcasecmp(dot, ".exe") == 0) {
+        *dot = '\0';
+    }
 }
 
 static void idle_message(const char *l1, const char *l2)
@@ -78,56 +91,73 @@ static void idle_message(const char *l1, const char *l2)
     ui_show_idle(l1, l2);
 }
 
-static void on_status(spotify_status_t st, const char *detail, void *ctx)
+static void on_state(const pc_media_state_t *st, void *ctx)
 {
     (void)ctx;
+    if (!st->has_session) {
+        if (!s_idle_shown) {
+            idle_message("Nothing playing", "Play something on your PC");
+            s_source[0] = '\0';
+        }
+        return;
+    }
+    if (strcmp(st->track_id, s_shown_track) != 0 || s_idle_shown) {
+        char src[sizeof s_source];
+        friendly_source(st->app, src, sizeof src);
+        strlcpy(s_source, src, sizeof s_source);
+        const char *title = st->title[0] ? st->title : s_source;
+        const char *artist = st->artist[0] ? st->artist : st->album;
+        ui_show_track(title, artist, st->duration_ms);
+        strlcpy(s_shown_track, st->track_id, sizeof s_shown_track);
+        s_idle_shown = false;
+    }
+    ui_set_progress(st->position_ms, st->playing);
+}
+
+static void on_art(const lv_image_dsc_t *dsc, void *ctx)
+{
+    (void)ctx;
+    ui_set_art(dsc);
+}
+
+static void on_status(pc_media_status_t st, const char *detail, void *ctx)
+{
+    (void)ctx;
+    (void)detail;
     switch (st) {
-    case SPOTIFY_STATUS_STARTING:
-        break;
-    case SPOTIFY_STATUS_WAITING_NETWORK:
-        ui_set_status(UI_STATUS_INFO, strcmp(detail, "clock") == 0 ? "Setting the clock..." : "Connecting to Wi-Fi...");
+    case PC_MEDIA_WAITING_NETWORK:
+        ui_set_status(UI_STATUS_INFO, "Connecting to Wi-Fi...");
         if (!s_shown_track[0]) {
             idle_message("Connecting...", "");
         }
         break;
-    case SPOTIFY_STATUS_NO_CLIENT_ID:
-        ui_set_status(UI_STATUS_WARN, "Setup needed");
-        idle_message("Spotify not set up", "This build has no Spotify Client ID");
+    case PC_MEDIA_SEARCHING:
+        ui_set_status(UI_STATUS_INFO, "Looking for your PC...");
+        if (!s_shown_track[0]) {
+            idle_message("Looking for your PC", "Is Desk Media Companion running on it?");
+        }
         break;
-    case SPOTIFY_STATUS_NEED_AUTH: {
-        char l2[96];
-        snprintf(l2, sizeof l2, "On your phone or PC open  %s", detail);
-        ui_set_status(UI_STATUS_WARN, "Spotify is not linked yet");
-        idle_message("Link your Spotify", l2);
+    case PC_MEDIA_CONNECTED:
+        ui_set_status(UI_STATUS_INFO, s_source);
         break;
-    }
-    case SPOTIFY_STATUS_AUTH_ERROR:
-        ui_set_status(UI_STATUS_ERROR, detail[0] ? detail : "Spotify authorization problem");
-        break;
-    case SPOTIFY_STATUS_OK:
+    case PC_MEDIA_NO_SESSION:
         ui_set_status(UI_STATUS_INFO, "");
         break;
-    case SPOTIFY_STATUS_NO_DEVICE:
-        ui_set_status(UI_STATUS_INFO, detail[0] ? detail : "No active Spotify device");
-        break;
-    case SPOTIFY_STATUS_NET_ERROR:
-        ui_set_status(UI_STATUS_WARN, detail[0] ? detail : "Network problem - retrying");
-        break;
-    case SPOTIFY_STATUS_RATE_LIMITED:
-        ui_set_status(UI_STATUS_WARN, detail);
-        break;
-    case SPOTIFY_STATUS_PREMIUM_REQUIRED:
-        ui_set_status(UI_STATUS_ERROR, detail[0] ? detail : "Playback control needs Spotify Premium");
+    case PC_MEDIA_UNREACHABLE:
+        ui_set_status(UI_STATUS_WARN, "Can't reach your PC");
+        if (!s_shown_track[0]) {
+            idle_message("Can't reach your PC", "Is it on, and is Desk Media Companion running?");
+        }
         break;
     }
 }
 
-/* ---- Wi-Fi state -> UI ------------------------------------------------------------------------------ */
+/* ---- Wi-Fi state ------------------------------------------------------------------------------------- */
 
 static void on_wifi_state(wifi_mgr_state_t st, void *ctx)
 {
     (void)ctx;
-    /* Called from the Wi-Fi event task / a timer: only log here. The Spotify task shows network state on screen. */
+    /* Called from the Wi-Fi event task / a timer: only log here. pc_media shows network state on screen. */
     ESP_LOGI(TAG, "wifi state -> %d", (int)st);
 }
 
@@ -161,7 +191,7 @@ __attribute__((noipa)) static const char *dev_wifi_ssid(void)
 void app_main(void)
 {
     const bool network_mode = dev_wifi_ssid()[0] != '\0';
-    ESP_LOGI(TAG, "spotify-desk-display starting (%s)", network_mode ? "network mode" : "UI demo mode, no credentials built in");
+    ESP_LOGI(TAG, "desk media display starting (%s)", network_mode ? "network mode" : "UI demo mode, no Wi-Fi credentials built in");
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -194,14 +224,13 @@ void app_main(void)
 
     ESP_ERROR_CHECK(wifi_mgr_init(on_wifi_state, NULL));
     ESP_ERROR_CHECK(wifi_mgr_connect(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));
-    net_selftest_start();
 
-    const spotify_config_t sp = {
-        .client_id = DEV_SPOTIFY_CLIENT_ID,
-        .redirect_uri = SPOTIFY_REDIRECT_URI,
-        .cbs = { .on_playback = on_playback, .on_art = on_art, .on_status = on_status, .ctx = NULL },
+    const pc_media_config_t pc = {
+        .static_host = DEV_COMPANION_HOST,
+        .port = 0,
+        .cbs = { .on_state = on_state, .on_art = on_art, .on_status = on_status, .ctx = NULL },
     };
-    ESP_ERROR_CHECK(spotify_start(&sp));
+    ESP_ERROR_CHECK(pc_media_start(&pc));
 
 #ifdef APP_WIFI_SELFTEST
     xTaskCreatePinnedToCore(wifi_selftest_task, "wifi_selftest", 4096, NULL, 2, NULL, 0);
