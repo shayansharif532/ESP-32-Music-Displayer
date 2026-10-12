@@ -30,6 +30,11 @@ typedef struct {
     char     track_id[16];      /* changes whenever the track changes */
     char     art_id[16];        /* "" = no artwork */
     bool     can_play, can_pause, can_next, can_prev, can_seek;
+    /* Spotify only (decided by the companion from the session's app identity): its shuffle toggle and repeat button. */
+    bool     spotify;
+    bool     shuffle;           /* shuffle is on */
+    uint8_t  repeat;            /* 0 = off, 1 = repeat the playlist / album, 2 = repeat the track */
+    bool     can_shuffle, can_repeat;
 } pc_media_state_t;
 
 typedef enum {
@@ -47,6 +52,8 @@ typedef enum {
     PC_MEDIA_CMD_SEEK,          /* arg = position in ms */
     PC_MEDIA_CMD_VOLUME_UP,     /* arg = step in percent points (0 = 5): the displayed app's own volume, not the PC's master volume */
     PC_MEDIA_CMD_VOLUME_DOWN,
+    PC_MEDIA_CMD_SHUFFLE,       /* Spotify only: toggle shuffle / cycle repeat (off -> playlist -> track -> off) of the displayed session */
+    PC_MEDIA_CMD_REPEAT,
     PC_MEDIA_CMD_SOURCE_NEXT,   /* switch the display (and everything it controls) to the next / previous media session on the PC */
     PC_MEDIA_CMD_SOURCE_PREV,
 } pc_media_cmd_t;

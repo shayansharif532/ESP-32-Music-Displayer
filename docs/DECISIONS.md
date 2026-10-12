@@ -64,7 +64,7 @@ Status: **accepted** (owner request after reviewing the M8 redesign on the real 
 * **Gestures**: horizontal swipe with distance / direction / time rules and a guard that a travelled press is never a tap; the progress bar never starts a swipe. *(The direction mapping was reversed
   by ADR-005: left = next, right = previous.)*
 
-## ADR-005 — Media-source switching by vertical swipe; the display, its controls and its volume always target one explicit session (2026-10-12) — **current**
+## ADR-005 — Media-source switching by vertical swipe; the display, its controls and its volume always target one explicit session (2026-10-12) — **current, except the "pinned" rule (superseded by ADR-006)**
 
 Status: **accepted** (owner request after using M8b). Details and evidence: `docs/milestones/M8c-session-switching.md`.
 
@@ -86,6 +86,25 @@ Status: **accepted** (owner request after using M8b). Details and evidence: `doc
   thumbnail stream through unchanged, and GSMTC exposes no URL / larger size / other image, so a browser thumbnail cannot be improved by asking more nicely. PC-side up-scaling was improved (edge-only, halo-limited,
   strength scaled by enlargement; Spotify-sized enlargements are bit-identical to before). **No browser extension**: it is the only route to a real high-resolution image (it can read the page's own
   `MediaSession` artwork list) but needs per-browser installation on the recipient's PC; recorded as an option in the M8c doc, deliberately not built.
+
+## ADR-006 — Manual source selection is temporary (AUTO / MANUAL_TEMP); Spotify shuffle / repeat through Windows' own session controls (2026-10-12) — **current**
+
+Status: **accepted** (owner request after using M8c). Details and evidence: `docs/milestones/M8d-auto-follow-spotify-options.md`. Supersedes the "pinned until the session disappears" rule of ADR-005.
+
+* **Auto-follow is the long-term mode; a swipe never disables it.** The companion's selection is an explicit two-state machine (`sources.Selector`, pure, 43 unit tests in test_sources.py):
+  * `AUTO`: follow the playing session that **started playing most recently** (ties: the system's current session); nothing playing: the app that played last, then the current session.
+  * `MANUAL_TEMP` (entered by a vertical swipe): the chosen session is shown while the user deals with it, and the display returns to `AUTO` when (a) **another** session starts playing (a pause -> play transition or a new playing session appearing),
+    (b) the selected session disappears, or (c) the selected session is *not* playing, another one is, and the user has not touched the selected session for **20 s** (`MANUAL_IDLE_RETURN_S`) - the only timeout, and only for the case
+    that no event can ever arrive ("Spotify just keeps playing"). A selected session that starts playing (the user pressed play on it) stays; a swipe that lands on what AUTO would show anyway is simply AUTO.
+    Brief `changing` / `opened` states (track changes) are not transitions. Interactions that restart the idle timer: any control, seek, shuffle / repeat or volume key aimed at the selected session, and another swipe.
+  * A background watcher (every 0.4 s, a few ms per look) keeps the model current even when the display is not polling, so transitions are never missed.
+* **Commands still always target the session on screen** (ADR-005): the display names it in every request, the companion refuses it if it is gone. When auto-follow switches the display, the next poll (<= 1 s) moves the screen and
+  from then on every control, seek and volume key follows the new session.
+* **Shuffle and repeat are Spotify-only and need no Spotify account.** Windows' GSMTC exposes them for Spotify desktop: `is_shuffle_active`, `auto_repeat_mode` (none / list / track), the enabled flags, and
+  `try_change_shuffle_active_async` / `try_change_auto_repeat_mode_async` are accepted by Spotify (state read back ~100 ms later). All three repeat modes are real (off, playlist / album, track). No OAuth / Web API.
+  Chrome, Edge, VLC ... report none of this. "Spotify" is decided by the session's **app identity** (`Spotify.exe` or the Store package `SpotifyAB.SpotifyMusic_...`), never by metadata, and the companion refuses the commands for every other app.
+* **UI**: two small buttons flank the transport row only while Spotify is shown (shuffle left of previous, repeat right of next); subtle when off, Spotify green with a dot when on, a "1" on the repeat icon for repeat-track, dimmed when Spotify
+  does not allow the change; previous / play / next are exactly where they were; hidden in full-screen mode and for every other app.
 
 ## ADR-002 — Spotify: rules that shape the design (verified against Spotify's own pages, 2026-10-11) — **OBSOLETE, superseded by ADR-003**
 

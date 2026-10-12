@@ -278,6 +278,11 @@ static void parse_state(const cJSON *root, pc_media_state_t *ns)
     ns->can_next = jbool(root, "can_next");
     ns->can_prev = jbool(root, "can_prev");
     ns->can_seek = jbool(root, "can_seek");
+    ns->spotify = jbool(root, "spotify");
+    ns->shuffle = ns->spotify && jbool(root, "shuffle");
+    ns->repeat = ns->spotify ? (jnum8(root, "repeat") > 2 ? 0 : jnum8(root, "repeat")) : 0;
+    ns->can_shuffle = ns->spotify && jbool(root, "can_shuffle");
+    ns->can_repeat = ns->spotify && jbool(root, "can_repeat");
 }
 
 /* Makes `ns` the current state: status line and UI callback. (The artwork download follows separately: it takes a moment, and
@@ -376,6 +381,25 @@ static void apply_source_answer(const char *path)
     update_art();                                       /* ... and the cover as soon as it has been downloaded */
 }
 
+/* The answer to a shuffle / repeat press: {"ok":true,"shuffle":true,"repeat":1,...,"now":{...}}. The state Windows reports afterwards
+ * replaces the optimistic toggle at once (no waiting for the next poll); a refusal just lets the next poll put the truth back. */
+static void apply_transport_answer(const char *path)
+{
+    cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
+    const cJSON *now = j ? cJSON_GetObjectItemCaseSensitive(j, "now") : NULL;
+    if (!j || !cJSON_IsObject(now)) {
+        ESP_LOGW(TAG, "command %s: no usable answer (HTTP %d)", path, s.resp.status);
+        cJSON_Delete(j);
+        return;
+    }
+    const bool ok = jbool(j, "ok");
+    pc_media_state_t ns;
+    parse_state(now, &ns);
+    ESP_LOGI(TAG, "command %s -> %s, shuffle %d repeat %u", path, ok ? "ok" : "refused", (int)ns.shuffle, (unsigned)ns.repeat);
+    cJSON_Delete(j);
+    apply_state(&ns);
+}
+
 static void do_command(const cmd_msg_t *m)
 {
     char host[16], path[224];
@@ -411,6 +435,21 @@ static void do_command(const cmd_msg_t *m)
         snprintf(path, sizeof path, "/control/volume-%s?step=%u&app=%s", m->cmd == PC_MEDIA_CMD_VOLUME_UP ? "up" : "down",
                  (unsigned)(m->arg ? m->arg : 5), app);
         break;
+    case PC_MEDIA_CMD_SHUFFLE:
+    case PC_MEDIA_CMD_REPEAT:
+        if (!s.st.has_session || !s.st.spotify) {
+            return;                                     /* the buttons are not even shown for other apps */
+        }
+        snprintf(path, sizeof path, "/control/%s?app=%s", m->cmd == PC_MEDIA_CMD_SHUFFLE ? "shuffle" : "repeat", app);
+        if (m->cmd == PC_MEDIA_CMD_SHUFFLE) {           /* optimistic: show the new state now, the PC's answer confirms it */
+            s.st.shuffle = !s.st.shuffle;
+        } else {
+            s.st.repeat = (uint8_t)((s.st.repeat + 1) % 3);
+        }
+        if (s.cbs.on_state) {
+            s.cbs.on_state(&s.st, s.cbs.ctx);
+        }
+        break;
     case PC_MEDIA_CMD_SOURCE_NEXT:
     case PC_MEDIA_CMD_SOURCE_PREV:
         snprintf(path, sizeof path, "/control/source-%s?from=%s", m->cmd == PC_MEDIA_CMD_SOURCE_NEXT ? "next" : "prev", app);
@@ -420,6 +459,7 @@ static void do_command(const cmd_msg_t *m)
     }
     const bool is_volume = (m->cmd == PC_MEDIA_CMD_VOLUME_UP || m->cmd == PC_MEDIA_CMD_VOLUME_DOWN);
     const bool is_source = (m->cmd == PC_MEDIA_CMD_SOURCE_NEXT || m->cmd == PC_MEDIA_CMD_SOURCE_PREV);
+    const bool is_transport = (m->cmd == PC_MEDIA_CMD_SHUFFLE || m->cmd == PC_MEDIA_CMD_REPEAT);
     esp_err_t err = pc_http_request(host, port, path, true, HTTP_TIMEOUT_MS, &s.resp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "command %s failed: %s", path, esp_err_to_name(err));
@@ -428,6 +468,8 @@ static void do_command(const cmd_msg_t *m)
         }
     } else if (is_source) {
         apply_source_answer(path);
+    } else if (is_transport) {
+        apply_transport_answer(path);
     } else if (is_volume) {
         /* {"ok":true,"volume":65,"muted":false,...} or {"ok":false,"error":"no audio session found for ..."} */
         cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;

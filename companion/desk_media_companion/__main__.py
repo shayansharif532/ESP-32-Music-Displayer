@@ -36,6 +36,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dev-tools", action="store_true", help="enable /debug/* routes used by tools/screenshot.py (development only)")
     ap.add_argument("--prefer-app", default="", help="development only: always show this app's media session when it exists "
                                                      "(e.g. python.exe for the fake test session)")
+    ap.add_argument("--treat-as-spotify", default="", help="development only: treat this app id (e.g. python.exe, the fake test session) as Spotify, "
+                                                          "so the shuffle / repeat buttons can be tested without touching the real Spotify")
+    ap.add_argument("--only-apps", default="", help="development only: ignore every media session except these app ids (comma separated), "
+                                                   "for isolated tests next to real apps")
+    ap.add_argument("--ignore-apps", default="", help="development only: never look at these app ids (comma separated), e.g. the fake test "
+                                                     "sessions python.exe,deskfakeb.exe, so tests do not show up on the real display")
     ap.add_argument("--probe", action="store_true", help="print the current media state once and exit")
     ap.add_argument("--install-startup", action="store_true", help="start automatically when you log in to Windows")
     ap.add_argument("--remove-startup", action="store_true", help="undo --install-startup")
@@ -56,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     from .media import MediaMonitor
     monitor = MediaMonitor()
     monitor.prefer_app = args.prefer_app
+    if args.ignore_apps:
+        monitor.ignore_apps = {a.strip().lower() for a in args.ignore_apps.split(",") if a.strip()}
+    if args.only_apps:
+        monitor.only_apps = {a.strip().lower() for a in args.only_apps.split(",") if a.strip()}
+    if args.treat_as_spotify:
+        monitor.spotify_ids = {a.strip().lower() for a in args.treat_as_spotify.split(",") if a.strip()}
     monitor.start()
 
     if args.probe:

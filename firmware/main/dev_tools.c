@@ -144,6 +144,8 @@ static void action_task(void *arg)
     else if (strcmp(a, "swipe_text") == 0)  drag(110, 352, 370, 352, 8);     /* starts on the text: still a swipe -> previous */
     else if (strcmp(a, "touch_cover") == 0) tap(240, 200);                   /* a real tap on the cover: full-screen toggle */
     else if (strcmp(a, "touch_play") == 0)  tap(240, 446);                   /* a real tap on play / pause */
+    else if (strcmp(a, "touch_shuffle") == 0) tap(62, 446);                  /* Spotify only: the small shuffle button */
+    else if (strcmp(a, "touch_repeat") == 0)  tap(418, 446);                 /* Spotify only: the small repeat button */
     else if (strcmp(a, "key_up") == 0 || strcmp(a, "key_down") == 0) {       /* as if the upper / lower side button was pressed */
         app_side_key(a[4] == 'u' ? SIDE_KEY_UP : SIDE_KEY_DOWN);
         if (s_shot_mid) {

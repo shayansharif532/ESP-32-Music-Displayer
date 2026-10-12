@@ -44,6 +44,8 @@ static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
     case UI_CMD_PLAY_PAUSE: pc_media_command(PC_MEDIA_CMD_PLAY_PAUSE, 0); break;
     case UI_CMD_NEXT:       pc_media_command(PC_MEDIA_CMD_NEXT, 0); break;
     case UI_CMD_SEEK:       pc_media_command(PC_MEDIA_CMD_SEEK, arg); break;
+    case UI_CMD_SHUFFLE:    pc_media_command(PC_MEDIA_CMD_SHUFFLE, 0); break;
+    case UI_CMD_REPEAT:     pc_media_command(PC_MEDIA_CMD_REPEAT, 0); break;
     case UI_CMD_SOURCE_NEXT: pc_media_command(PC_MEDIA_CMD_SOURCE_NEXT, 0); break;
     case UI_CMD_SOURCE_PREV: pc_media_command(PC_MEDIA_CMD_SOURCE_PREV, 0); break;
     }
@@ -133,6 +135,7 @@ static void on_state(const pc_media_state_t *st, void *ctx)
         return;
     }
     ui_set_sources(st->sources);
+    ui_set_spotify_controls(st->spotify, st->can_shuffle, st->can_repeat, st->shuffle, st->repeat);   /* Spotify only */
     if (strcmp(st->track_id, s_shown_track) != 0 || s_idle_shown) {
         char src[sizeof s_source];
         friendly_source(st->source[0] ? st->source : st->app, src, sizeof src);

@@ -18,6 +18,7 @@ from PIL import Image
 from . import artwork as art_tools
 from . import sources as src_model
 from . import volume as app_volume
+from winrt.windows.media import MediaPlaybackAutoRepeatMode as RepeatMode
 from winrt.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
@@ -35,7 +36,13 @@ STATE_NAMES = {
     PlaybackStatus.PLAYING: "playing",
 }
 
+# Spotify's repeat button: off -> repeat the playlist / album ("list") -> repeat the track -> off
+_REPEAT_TO_INT = {RepeatMode.NONE: 0, RepeatMode.LIST: 1, RepeatMode.TRACK: 2}
+_INT_TO_REPEAT = {v: k for k, v in _REPEAT_TO_INT.items()}
+_REPEAT_NAMES = {"off": 0, "list": 1, "track": 2}
+
 SNAPSHOT_TTL_S = 0.25          # several clients polling at once share one WinRT read
+WATCH_INTERVAL_S = 0.4         # how often the selection model looks at all sessions in the background
 ART_RETRY_INTERVAL_S = 1.5     # apps often publish the thumbnail a moment after the title
 ART_MAX_TRIES = 8
 ART_DEFAULT_SIZE = 300
@@ -77,11 +84,23 @@ class MediaMonitor:
         self._art_last_try = 0.0
         self._seq = 0
         self._last_sig = ""
-        self._last_playing_app = ""      # when everything is paused, stay on the app that was playing last
-        self._pinned = ""                # app id the user selected with a vertical swipe ("" = automatic); dropped when it disappears
-        self.prefer_app = ""             # dev only: always show this app's session when it exists (e.g. the fake test session)
+        self.sel = src_model.Selector()  # AUTO / MANUAL_TEMP selection state machine (loop thread only)
+        self.ignore_apps: set[str] = set()   # dev only: never look at these app ids (keeps fake test sessions off the real display)
+        self.only_apps: set[str] = set()     # dev only: ignore every session except these app ids (isolated tests next to the owner's real apps)
+        self.spotify_ids: set[str] = set()   # dev only: extra app ids treated as Spotify (--treat-as-spotify python.exe, the fake session)
         self._debug_lock = threading.Lock()
         self._debug_request = ""          # dev tools: one-shot request handed to the display with the next /now-playing
+
+    @property
+    def prefer_app(self) -> str:         # dev only: always show this app's session when it exists (e.g. the fake test session)
+        return self.sel.prefer
+
+    @prefer_app.setter
+    def prefer_app(self, app: str) -> None:
+        self.sel.prefer = app
+
+    def _is_spotify(self, app_id: str) -> bool:
+        return src_model.is_spotify(app_id) or app_id.lower() in self.spotify_ids
 
     # ---- lifecycle ------------------------------------------------------------------------------
     def start(self) -> None:
@@ -89,7 +108,18 @@ class MediaMonitor:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
+        self._loop.create_task(self._watch())
         self._loop.run_forever()
+
+    async def _watch(self) -> None:
+        """Keeps the selection model up to date even when nobody polls: a session that starts playing, or a selected session that
+        disappears, is noticed within WATCH_INTERVAL_S (reading every session costs a few ms)."""
+        while True:
+            try:
+                await self._read_sources(await self._get_manager())
+            except Exception as exc:
+                log.debug("watcher: %s", exc)
+            await asyncio.sleep(WATCH_INTERVAL_S)
 
     def _call(self, coro, timeout: float):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=timeout)
@@ -150,9 +180,10 @@ class MediaMonitor:
         return result
 
     def switch_source(self, direction: int, shown_app: str = "") -> dict[str, Any]:
-        """Vertical swipe: select the next (+1) / previous (-1) usable media session, pin the display to it (the answer carries
-        the new now-playing snapshot so the display can switch at once). Does nothing when there is only one source.
-        shown_app = the app the display shows, so the swipe is relative to what the user sees."""
+        """Vertical swipe: select the next (+1) / previous (-1) usable media session - a TEMPORARY manual selection (MANUAL_TEMP,
+        see sources.py), not a pin; the answer carries the new now-playing snapshot so the display can switch at once.
+        Does nothing when there is only one source. shown_app = the app the display shows, so the swipe is relative to what
+        the user sees."""
         try:
             result = self._call(self._switch_source(direction, shown_app), CONTROL_TIMEOUT_S)
         except Exception as exc:
@@ -165,9 +196,11 @@ class MediaMonitor:
 
     def auto_source(self) -> dict[str, Any]:
         """Back to automatic mode (follow the best session). Not wired to a gesture; a development / support aid."""
-        self._pinned = ""
+        async def work() -> None:
+            self.sel.to_auto()
+        self._call(work(), CONTROL_TIMEOUT_S)
         self._snap = None
-        log.info("source selection: automatic")
+        log.info("source selection: automatic (requested)")
         return {"ok": True, "action": "source-auto", "now": self.now_playing()}
 
     def list_sources(self) -> dict[str, Any]:
@@ -206,6 +239,8 @@ class MediaMonitor:
         """The app a volume request goes to: the one the display says it shows (if it still has a session), else - only when the
         display named none - the session the display would show now."""
         selected = await self._select(wanted)
+        if selected is not None and wanted:
+            self.sel.touch(time.monotonic(), selected.app)       # a volume key press is an interaction with the shown session
         return selected.app if selected else ""
 
     # ---- session selection (the model itself is in sources.py) ------------------------------------
@@ -232,7 +267,8 @@ class MediaMonitor:
         objs: dict[str, Any] = {}
         for s in sessions:
             app = s.source_app_user_model_id or ""
-            if not app or app in objs:
+            if (not app or app in objs or app.lower() in self.ignore_apps
+                    or (self.only_apps and app.lower() not in self.only_apps)):
                 continue
             objs[app] = s
             state = STATE_NAMES.get(self._status(s), "")
@@ -247,6 +283,10 @@ class MediaMonitor:
             cur_app = (cur.source_app_user_model_id or "") if cur is not None else ""
         except Exception:
             cur_app = ""
+        if cur_app not in objs:
+            cur_app = ""
+        for note in self.sel.observe(srcs, time.monotonic()):         # who started playing / disappeared; may end MANUAL_TEMP
+            log.info("selection: %s", note)
         return srcs, objs, cur_app
 
     # ---- snapshot -------------------------------------------------------------------------------
@@ -254,18 +294,15 @@ class MediaMonitor:
         """The session shown on the display AND controlled by the buttons / gestures / volume keys.
 
         wanted = the app the display says it shows. When given, ONLY that session is returned (None if it is gone), so a command
-        can never land on a different session than the one the user looked at. Otherwise: the development pin, the user's
-        pin (vertical swipe), then automatic (see sources.candidate_order). Dead / not-ready sessions are skipped."""
+        can never land on a different session than the one the user looked at. Otherwise the selection model decides:
+        the development preference, the temporary manual selection (MANUAL_TEMP, while it lasts), then automatic - the
+        most recently started playing session first (sources.Selector). Dead / not-ready sessions are skipped."""
         mgr = await self._get_manager()
         srcs, objs, cur_app = await self._read_sources(mgr)
-        if self._pinned and not src_model._find(objs.keys(), self._pinned):
-            log.info("pinned source %s is gone: back to automatic", self._pinned)
-            self._pinned = ""
         if wanted:
             order = [a for a in objs if a.lower() == wanted.lower()]
         else:
-            order = src_model.candidate_order(srcs, current=cur_app, pinned=self._pinned, last_playing=self._last_playing_app,
-                                              prefer=self.prefer_app)
+            order = self.sel.order(srcs, current=cur_app)
         for app in order:
             session = objs[app]
             try:
@@ -280,7 +317,7 @@ class MediaMonitor:
 
     async def _switch_source(self, direction: int, shown_app: str) -> dict[str, Any]:
         mgr = await self._get_manager()
-        srcs, objs, _cur = await self._read_sources(mgr)
+        srcs, objs, cur_app = await self._read_sources(mgr)
         shown = src_model._find(objs.keys(), shown_app) if shown_app else None
         if shown is None:                                # the display is out of date (its session is gone): relative to what we show
             selected = await self._select()
@@ -289,12 +326,13 @@ class MediaMonitor:
         target = src_model.step(srcs, shown, direction)
         if target is None:
             return {"ok": True, "action": "source", "changed": False, "count": len(ring), "app": shown,
-                    "source": src_model.friendly_name(shown) if shown else ""}
-        self._pinned = target
+                    "source": src_model.friendly_name(shown) if shown else "", "mode": self.sel.mode.value}
+        mode = self.sel.select(target, srcs, cur_app, time.monotonic())
         idx, count = src_model.position(srcs, target)
-        log.info("source -> %s (%d of %d) by swipe %s from %s", target, idx, count, "up" if direction >= 0 else "down", shown)
+        log.info("source -> %s (%d of %d) by swipe %s from %s; mode %s", target, idx, count, "up" if direction >= 0 else "down", shown,
+                 mode.value)
         return {"ok": True, "action": "source", "changed": True, "app": target, "source": src_model.friendly_name(target),
-                "index": idx, "count": count}
+                "index": idx, "count": count, "mode": mode.value}
 
     async def _list_sources(self) -> dict[str, Any]:
         mgr = await self._get_manager()
@@ -307,7 +345,7 @@ class MediaMonitor:
             s = by_app.get(app)
             rows.append({"app": app, "name": src_model.friendly_name(app), "state": s.state if s else "", "title": s.title if s else "",
                          "artist": s.artist if s else "", "displayed": app == shown})
-        return {"ok": True, "displayed": shown, "pinned": self._pinned, "mode": "pinned" if self._pinned else "auto", "sources": rows}
+        return {"ok": True, "displayed": shown, "mode": self.sel.mode.value, "manual": self.sel.manual, "sources": rows}
 
     # ---- snapshot -------------------------------------------------------------------------------
     async def _snapshot(self) -> dict[str, Any]:
@@ -318,8 +356,6 @@ class MediaMonitor:
             app = selected.app
             status = info.playback_status
             state = STATE_NAMES.get(status, "unknown")
-            if status == PlaybackStatus.PLAYING:
-                self._last_playing_app = app
             title = props.title or ""
             artist = props.artist or props.album_artist or props.subtitle or ""
             album = props.album_title or ""
@@ -351,7 +387,7 @@ class MediaMonitor:
                 "source": src_model.friendly_name(app),     # short name for the on-screen label
                 "sources": count,                           # how many sessions a vertical swipe can switch between
                 "source_index": index,
-                "pinned": bool(self._pinned and self._pinned.lower() == app.lower()),
+                "mode": self._mode_for(app),               # "manual" while this session is a temporary manual selection, else "auto"
                 "state": state,
                 "playing": status == PlaybackStatus.PLAYING,
                 "title": title,
@@ -367,6 +403,7 @@ class MediaMonitor:
                 "can_prev": bool(ctl.is_previous_enabled),
                 "can_seek": bool(ctl.is_playback_position_enabled),
             }
+            snap.update(self._transport_fields(app, info))
             sig = f"{app}|{state}|{track_key}|{self._art_id}"
             if sig != self._last_sig:
                 self._last_sig = sig
@@ -385,10 +422,23 @@ class MediaMonitor:
             self._art_img, self._art_id, self._art_cache = None, "", {}
         self._track_key = ""
         return {"ok": True, "version": 1, "has_session": False, "state": "none", "playing": False,
-                "source": "", "sources": 0, "source_index": 0, "pinned": False,
+                "source": "", "sources": 0, "source_index": 0, "mode": self.sel.mode.value,
                 "title": "", "artist": "", "album": "", "position_ms": 0, "duration_ms": 0,
                 "track_id": "", "art_id": "", "can_play": False, "can_pause": False, "can_next": False,
-                "can_prev": False, "can_seek": False, "seq": self._seq}
+                "can_prev": False, "can_seek": False, "spotify": False, "shuffle": False, "repeat": 0,
+                "can_shuffle": False, "can_repeat": False, "seq": self._seq}
+
+    def _mode_for(self, app: str) -> str:
+        return "manual" if self.sel.mode is src_model.Mode.MANUAL_TEMP and self.sel.manual.lower() == app.lower() else "auto"
+
+    def _transport_fields(self, app: str, info) -> dict[str, Any]:
+        """Shuffle / repeat state, offered for Spotify only (decided by the session's app identity, never by metadata).
+        Windows reports them for Spotify (`is_shuffle_active`, `auto_repeat_mode` = off / list / track) and accepts changes."""
+        if not self._is_spotify(app):
+            return {"spotify": False, "shuffle": False, "repeat": 0, "can_shuffle": False, "can_repeat": False}
+        ctl = info.controls
+        return {"spotify": True, "shuffle": bool(info.is_shuffle_active), "repeat": _REPEAT_TO_INT.get(info.auto_repeat_mode, 0),
+                "can_shuffle": bool(ctl.is_shuffle_enabled), "can_repeat": bool(ctl.is_repeat_enabled)}
 
     # ---- artwork --------------------------------------------------------------------------------
     async def _update_artwork(self, track_key: str, props) -> None:
@@ -434,10 +484,13 @@ class MediaMonitor:
         if selected is None:
             return {"ok": False, "action": action, "error": "that media session is gone" if wanted else "no media session"}
         session, info = selected.session, selected.info
+        self.sel.touch(time.monotonic(), selected.app)    # the user is dealing with this session: restarts the manual idle timer
         for _once in (0,):
             try:
                 ctl = info.controls
                 playing = info.playback_status == PlaybackStatus.PLAYING
+                if action.startswith(("shuffle", "repeat")):
+                    return await self._spotify_transport(selected, action)
                 if action == "playpause":
                     if playing and ctl.is_pause_enabled:
                         ok = await session.try_pause_async()
@@ -467,4 +520,42 @@ class MediaMonitor:
                 return {"ok": False, "action": action, "error": str(exc)[:120]}
         return {"ok": False, "action": action, "error": "no media session"}
 
+    async def _spotify_transport(self, selected: _Selection, action: str) -> dict[str, Any]:
+        """Spotify's shuffle toggle and repeat button through Windows' own session controls (no Spotify account / OAuth involved).
+        action: shuffle | shuffle-on | shuffle-off | repeat (cycles off -> list -> track -> off) | repeat-off | repeat-list | repeat-track.
+        Refused for every other app: the buttons exist for Spotify only. The answer carries the state Windows reports afterwards."""
+        app, session, info = selected.app, selected.session, selected.info
+        if not self._is_spotify(app):
+            return {"ok": False, "action": action, "app": app, "error": "shuffle / repeat are only offered for Spotify"}
+        ctl = info.controls
+        if action.startswith("shuffle"):
+            if not ctl.is_shuffle_enabled:
+                return {"ok": False, "action": action, "app": app, "error": "Spotify does not allow shuffle changes right now"}
+            want = (not bool(info.is_shuffle_active)) if action == "shuffle" else action == "shuffle-on"
+            ok = await session.try_change_shuffle_active_async(want)
+            await self._settle(session, lambda i: bool(i.is_shuffle_active) == want)
+        else:
+            if not ctl.is_repeat_enabled:
+                return {"ok": False, "action": action, "app": app, "error": "Spotify does not allow repeat changes right now"}
+            if action == "repeat":
+                want_mode = (_REPEAT_TO_INT.get(info.auto_repeat_mode, 0) + 1) % 3
+            else:
+                want_mode = _REPEAT_NAMES.get(action[len("repeat-"):], -1)
+            if want_mode not in _INT_TO_REPEAT:
+                return {"ok": False, "action": action, "app": app, "error": "unknown repeat mode"}
+            ok = await session.try_change_auto_repeat_mode_async(_INT_TO_REPEAT[want_mode])
+            await self._settle(session, lambda i: _REPEAT_TO_INT.get(i.auto_repeat_mode, 0) == want_mode)
+        fresh = session.get_playback_info()
+        log.info("control %s on %s -> %s (shuffle %s, repeat %s)", action, app, "ok" if ok else "refused", bool(fresh.is_shuffle_active),
+                 _REPEAT_TO_INT.get(fresh.auto_repeat_mode, 0))
+        return {"ok": bool(ok), "action": action, "app": app, **self._transport_fields(app, fresh)}
 
+    @staticmethod
+    async def _settle(session, done, timeout: float = 0.6) -> bool:
+        """Windows reports a shuffle / repeat change ~100 ms after the app applied it: wait (briefly) so the answer shows the new state."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if done(session.get_playback_info()):
+                return True
+            await asyncio.sleep(0.05)
+        return False

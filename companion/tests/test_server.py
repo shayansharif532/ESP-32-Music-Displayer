@@ -79,6 +79,14 @@ class Api(unittest.TestCase):
                                           ("control", "previous", None, "chrome.exe"), ("control", "play", None, "chrome.exe"),
                                           ("control", "pause", None, "chrome.exe"), ("control", "seek", 12345, "Spotify.exe")])
 
+    def test_shuffle_and_repeat_routes_carry_the_app_and_answer_with_the_fresh_state(self):
+        status, body = self.req("POST", "/control/shuffle?app=Spotify.exe")
+        self.assertEqual((status, body["ok"], body["now"]["app"]), (200, True, "Spotify.exe"))
+        for action in ("repeat", "repeat-track", "shuffle-off"):
+            self.req("POST", f"/control/{action}?app=Spotify.exe")
+        self.assertEqual(self.mon.calls, [("control", "shuffle", None, "Spotify.exe"), ("control", "repeat", None, "Spotify.exe"),
+                                          ("control", "repeat-track", None, "Spotify.exe"), ("control", "shuffle-off", None, "Spotify.exe")])
+
     def test_controls_without_app_still_work(self):
         self.req("POST", "/control/next")
         self.assertEqual(self.mon.calls, [("control", "next", None, "")])

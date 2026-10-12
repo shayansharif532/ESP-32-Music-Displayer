@@ -10,6 +10,8 @@
  *   - vertical swipe on the screen: up = next media source (another app's session on the PC), down = previous source;
  *     a short pill shows the source's name (not from the progress bar, nothing happens with a single source)
  *   - a short translucent "Volume 65%" pill on top when the side buttons change the volume
+ * Spotify only: two small buttons flank the transport row - shuffle (left of previous) and repeat (right of next; off ->
+ * playlist -> track). Subtle when off, Spotify green with a dot when on, a "1" on the repeat icon for "repeat the track".
  */
 #include "ui.h"
 
@@ -40,6 +42,8 @@
 #define PLAY_D          60
 #define SIDE_D          64                                 /* touch area of prev / next (no visible circle) */
 #define SIDE_DX         112
+#define SMALL_D         52                                 /* touch area of the Spotify-only shuffle / repeat buttons */
+#define SMALL_DX        178                                /* ... centred this far from the middle */
 
 /* ---- touch gestures ---------------------------------------------------------------------------- */
 #define SWIPE_MIN       72      /* px of travel along the swipe axis before it counts as a swipe (a tap moves < 10) */
@@ -75,6 +79,7 @@ static struct {
     lv_obj_t *status, *title, *artist;
     lv_obj_t *slider, *t_elapsed, *t_total;
     lv_obj_t *btn_prev, *btn_play, *btn_next, *lbl_play;
+    lv_obj_t *btn_shuffle, *btn_repeat, *lbl_shuffle, *lbl_repeat, *lbl_repeat1, *dot_shuffle, *dot_repeat;   /* Spotify only */
     lv_obj_t *fx, *fx_lbl;               /* swipe feedback (top-most) */
     lv_obj_t *vol, *vol_lbl, *vol_bar;   /* volume / source pill (top-most) */
     lv_obj_t *dots[SRC_DOTS_MAX];        /* source position dots inside the pill (instead of the volume bar) */
@@ -87,6 +92,8 @@ static struct {
     bool playing;
     bool fullscreen;
     bool can_prev, can_next;
+    bool spotify, sp_can_shuffle, sp_can_repeat, sp_shuffle;     /* what the Spotify buttons currently show */
+    int sp_repeat;
     int sources;                         /* media sources the PC offers; a vertical swipe needs >= 2 */
     int art_w, art_h;                    /* pixel size of the cover on screen (normal layout) */
     int fx_dx, fx_dy;                    /* direction the swipe disc drifts (-1, 0, +1) */
@@ -271,6 +278,8 @@ static void fire(ui_cmd_t cmd, uint32_t arg)
 static void on_prev(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_PREV, 0); }
 static void on_play(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_PLAY_PAUSE, 0); }
 static void on_next(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_NEXT, 0); }
+static void on_shuffle(lv_event_t *e) { (void)e; if (!sw.moved) fire(UI_CMD_SHUFFLE, 0); }
+static void on_repeat(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_REPEAT, 0); }
 
 static void on_slider_changed(lv_event_t *e)
 {
@@ -293,6 +302,8 @@ static void on_slider_released(lv_event_t *e)
     fire(UI_CMD_SEEK, pos);
 }
 
+static void apply_spotify_buttons(void);
+
 static void set_chrome_hidden(bool hidden)
 {
     lv_obj_t *items[] = { s.status, s.title, s.artist, s.slider, s.t_elapsed, s.t_total,
@@ -304,6 +315,7 @@ static void set_chrome_hidden(bool hidden)
             lv_obj_remove_flag(items[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+    apply_spotify_buttons();                       /* hidden in full screen; otherwise only while the session is Spotify */
 }
 
 static void on_art_clicked(lv_event_t *e)
@@ -531,6 +543,21 @@ static lv_obj_t *make_button(lv_obj_t *scr, int32_t d, uint32_t fill, uint32_t f
     return b;
 }
 
+/* A 4 px dot under an active Spotify button (so the state is not carried by colour alone). */
+static lv_obj_t *make_dot(lv_obj_t *parent)
+{
+    lv_obj_t *d = lv_obj_create(parent);
+    lv_obj_remove_style_all(d);
+    lv_obj_set_size(d, 4, 4);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(d, lv_color_hex(COL_OK), 0);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(d, LV_ALIGN_CENTER, 0, 17);
+    lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
+    return d;
+}
+
 /* Overlays are the last (= top-most) children of the screen and never clickable, so they never take part in hit-testing. */
 static void make_overlays(void)
 {
@@ -710,6 +737,22 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_obj_align(s.btn_next, LV_ALIGN_TOP_MID, SIDE_DX, CTRL_Y - SIDE_D / 2);
     lv_obj_add_event_cb(s.btn_next, on_next, LV_EVENT_CLICKED, NULL);
 
+    /* Spotify only: small, subtle shuffle (left of previous) and repeat (right of next); hidden for every other app */
+    s.btn_shuffle = make_button(scr, SMALL_D, 0, 0, false, LV_SYMBOL_SHUFFLE, &lv_font_montserrat_20, COL_TEXT, &s.lbl_shuffle);
+    lv_obj_align(s.btn_shuffle, LV_ALIGN_TOP_MID, -SMALL_DX, CTRL_Y - SMALL_D / 2);
+    lv_obj_add_event_cb(s.btn_shuffle, on_shuffle, LV_EVENT_CLICKED, NULL);
+    s.dot_shuffle = make_dot(s.btn_shuffle);
+
+    s.btn_repeat = make_button(scr, SMALL_D, 0, 0, false, LV_SYMBOL_LOOP, &lv_font_montserrat_20, COL_TEXT, &s.lbl_repeat);
+    lv_obj_align(s.btn_repeat, LV_ALIGN_TOP_MID, SMALL_DX, CTRL_Y - SMALL_D / 2);
+    lv_obj_add_event_cb(s.btn_repeat, on_repeat, LV_EVENT_CLICKED, NULL);
+    s.dot_repeat = make_dot(s.btn_repeat);
+    s.lbl_repeat1 = make_label(s.btn_repeat, &lv_font_montserrat_14, COL_OK);        /* "1" = repeat the track */
+    lv_label_set_text(s.lbl_repeat1, "1");
+    lv_obj_align(s.lbl_repeat1, LV_ALIGN_CENTER, 10, -9);
+    lv_obj_add_flag(s.lbl_repeat1, LV_OBJ_FLAG_HIDDEN);
+    apply_spotify_buttons();
+
     lv_label_set_text(s.title, "Starting...");
     lv_label_set_text(s.artist, "");
     set_play_icon(false);
@@ -769,6 +812,8 @@ void ui_show_idle(const char *line1, const char *line2)
     s.has_track = false;
     s.playing = false;
     s.sources = 0;
+    s.spotify = false;
+    apply_spotify_buttons();
     s.can_prev = s.can_next = false;
     s.duration_ms = 0;
     s.anchor_ms = 0;
@@ -817,6 +862,55 @@ void ui_set_capabilities(bool can_prev, bool can_next, bool can_seek)
         return;
     }
     apply_caps(can_prev, can_next, can_seek && s.duration_ms > 0);
+    bsp_display_unlock();
+}
+
+/* Shows / hides and styles the two Spotify buttons from the stored state. LVGL lock held by the caller (or init time). */
+static void apply_spotify_buttons(void)
+{
+    const bool show = s.spotify && !s.fullscreen;
+    lv_obj_t *btns[] = { s.btn_shuffle, s.btn_repeat };
+    for (size_t i = 0; i < 2; i++) {
+        if (show) {
+            lv_obj_remove_flag(btns[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(btns[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (!show) {
+        return;
+    }
+    const bool sh_on = s.sp_shuffle, rp_on = s.sp_repeat != 0;
+    lv_obj_set_style_text_color(s.lbl_shuffle, lv_color_hex(sh_on ? COL_OK : COL_TEXT), 0);
+    lv_obj_set_style_text_opa(s.lbl_shuffle, sh_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    if (sh_on) lv_obj_remove_flag(s.dot_shuffle, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.dot_shuffle, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(s.btn_shuffle, s.sp_can_shuffle ? LV_OPA_COVER : LV_OPA_30, 0);          /* dimmed when Spotify refuses it */
+
+    lv_obj_set_style_text_color(s.lbl_repeat, lv_color_hex(rp_on ? COL_OK : COL_TEXT), 0);
+    lv_obj_set_style_text_opa(s.lbl_repeat, rp_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    if (rp_on) lv_obj_remove_flag(s.dot_repeat, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.dot_repeat, LV_OBJ_FLAG_HIDDEN);
+    if (s.sp_repeat == 2) lv_obj_remove_flag(s.lbl_repeat1, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.lbl_repeat1, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(s.btn_repeat, s.sp_can_repeat ? LV_OPA_COVER : LV_OPA_30, 0);
+}
+
+void ui_set_spotify_controls(bool spotify, bool can_shuffle, bool can_repeat, bool shuffle, int repeat)
+{
+    if (repeat < 0 || repeat > 2) {
+        repeat = 0;
+    }
+    if (!s.ready || (s.spotify == spotify && s.sp_can_shuffle == can_shuffle && s.sp_can_repeat == can_repeat &&
+                     s.sp_shuffle == shuffle && s.sp_repeat == repeat)) {
+        return;                                          /* unchanged: no lock, no redraw */
+    }
+    if (!bsp_display_lock(1000)) {
+        return;
+    }
+    s.spotify = spotify;
+    s.sp_can_shuffle = can_shuffle;
+    s.sp_can_repeat = can_repeat;
+    s.sp_shuffle = shuffle;
+    s.sp_repeat = repeat;
+    apply_spotify_buttons();
     bsp_display_unlock();
 }
 

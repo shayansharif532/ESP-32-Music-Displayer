@@ -27,7 +27,7 @@ COMPANION = "http://127.0.0.1:8765"
 # run while the displayed session is the fake test session. swipe_up / swipe_down only change WHICH session is shown (the vertical
 # swipe selects a media source; nothing is played, paused, skipped or seeked), so they are allowed anywhere.
 DEV_ACTIONS = ["swipe_right", "swipe_left", "swipe_up", "swipe_down", "swipe_diag", "swipe_bar", "swipe_bar_v", "swipe_text",
-               "touch_cover", "touch_play", "key_up", "key_down", "keyhold_up", "keyhold_down",
+               "touch_cover", "touch_play", "touch_shuffle", "touch_repeat", "key_up", "key_down", "keyhold_up", "keyhold_down",
                "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"]
 SELECTION_ONLY = {"swipe_up", "swipe_down", "swipe_up_shot", "swipe_down_shot"}

@@ -1,21 +1,29 @@
 """Which Windows media sessions the display can show, and how it moves between them. Pure logic: no WinRT, no I/O.
 
-Model (see docs/milestones/M8c-session-switching.md):
+The selection model (ADR-005, refined by ADR-006) is an explicit two-state machine, `Selector`:
 
-* AUTO (the default): the display follows the "best" session - the system's current session when it is playing, else any
-  playing session, else the app that played last, else the current session, else the rest.
-* PINNED: a vertical swipe on the display selects a session. From then on the display (artwork, title, timeline, controls,
-  volume) stays on exactly that session - another app that becomes active does not take over - for as long as the session
-  exists. When it disappears the pin is dropped and AUTO takes over again.
-* The swipe list ("sources") holds the sessions that are worth showing: playing or paused ones that carry media metadata.
-  Dead / metadata-less sessions are left out. The session that is on screen is always part of the list. The order is fixed
+* AUTO (the default, and always the long-term mode): follow the most relevant PLAYING session - when several play, the one
+  that started playing most recently; when nothing plays, the app that played last, then the system's current session.
+* MANUAL_TEMP: a vertical swipe selects another existing session. It is shown while the user is dealing with it, and it is
+  only ever temporary. The display returns to AUTO
+    - as soon as ANOTHER session starts playing (a pause -> play transition, or a new playing session appearing),
+    - as soon as the selected session disappears,
+    - when the selected session is not playing, some other session is, and the user has not touched the selected session for
+      MANUAL_IDLE_RETURN_S seconds (nobody is "interacting" with it any more),
+    - or when a swipe lands on the session AUTO would show anyway (that is simply AUTO).
+  A selected session that starts playing (the user pressed play on it) is not a reason to leave it.
+* The swipe list ("sources", the ring) holds the sessions that are worth showing: playing or paused ones that carry media
+  metadata. Dead / metadata-less sessions are left out; the session on screen is always part of it. The order is fixed
   (alphabetical by app name), so repeated swipes walk through the same ring and wrap around at the ends.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Optional
+
+MANUAL_IDLE_RETURN_S = 20.0      # see MANUAL_TEMP above
 
 # Windows app ids -> short names for the on-screen label.
 _KNOWN = {
@@ -70,14 +78,24 @@ def _find(apps: Iterable[str], wanted: str) -> Optional[str]:
     return None
 
 
-def candidate_order(sources: list[Source], *, current: str = "", pinned: str = "", last_playing: str = "", prefer: str = "",
-                    wanted: str = "") -> list[str]:
+def is_spotify(app_id: str) -> bool:
+    """True only for the Spotify desktop app, judged by the Windows app identity of the session (never by track metadata):
+    the classic `Spotify.exe`, or the Microsoft Store package (`SpotifyAB.SpotifyMusic_...!Spotify`)."""
+    a = (app_id or "").strip().lower()
+    return a == "spotify.exe" or a.startswith("spotifyab.spotifymusic_") or a == "spotify"
+
+
+def candidate_order(sources: list[Source], *, current: str = "", manual: str = "", last_playing: str = "", prefer: str = "",
+                    wanted: str = "", since: Optional[dict[str, float]] = None) -> list[str]:
     """App ids in the order the display should try them (the first one that answers is shown).
 
     wanted  - the app the caller says is on screen (controls / volume are applied to that session, never to a different one)
-    prefer  - development only (--prefer-app): pin a test session no matter what
-    pinned  - the user's own selection (vertical swipe)
-    then AUTO: current session if playing, any playing session, the app that played last, the current session, the rest."""
+    prefer  - development only (--prefer-app): force a test session no matter what
+    manual  - the user's temporary selection (vertical swipe, MANUAL_TEMP), empty in AUTO
+    then AUTO: the playing sessions, the one that started playing most recently first (ties: the system's current session,
+    then Windows' order), the app that played last, the current session, the rest.
+    since   - {app: when it last started playing} (any monotonically increasing number)"""
+    since = since or {}
     apps = [s.app for s in sources]
     state = {s.app: s.state for s in sources}
     out: list[str] = []
@@ -86,21 +104,104 @@ def candidate_order(sources: list[Source], *, current: str = "", pinned: str = "
         if app and not any(_same(app, o) for o in out):
             out.append(app)
 
-    for key in (wanted, prefer, pinned):
+    for key in (wanted, prefer, manual):
         if key:
             add(_find(apps, key))
     cur = _find(apps, current) if current else None
-    if cur and state.get(cur) == "playing":
-        add(cur)
-    for a in apps:
-        if state.get(a) == "playing":
-            add(a)
+    playing = [a for a in apps if state.get(a) == "playing"]
+    for a in sorted(playing, key=lambda x: (-since.get(x, 0.0), 0 if x == cur else 1, apps.index(x))):
+        add(a)
     if last_playing:
         add(_find(apps, last_playing))
     add(cur)
     for a in apps:
         add(a)
     return out
+
+
+class Mode(str, Enum):
+    AUTO = "auto"
+    MANUAL_TEMP = "manual"
+
+
+class Selector:
+    """Which session the display shows. Feed it every reading of the sessions with observe(); ask order() for the candidates.
+    Time is passed in (monotonic seconds) so the whole model is testable without a clock."""
+
+    def __init__(self, idle_return_s: float = MANUAL_IDLE_RETURN_S) -> None:
+        self.idle_return_s = idle_return_s
+        self.mode = Mode.AUTO
+        self.manual = ""                      # the app selected by a swipe (MANUAL_TEMP only)
+        self.last_interaction = 0.0
+        self.last_playing = ""                # the app that played most recently (what AUTO shows when nothing plays)
+        self.prefer = ""                      # development only (--prefer-app)
+        self._stable: dict[str, str] = {}     # app -> last settled state (playing / paused / stopped); transient states are ignored
+        self._since: dict[str, float] = {}    # app -> when it last started playing
+
+    # -- observing -------------------------------------------------------------------------------------------------------
+    def observe(self, sources: list[Source], now: float) -> list[str]:
+        """Update from a reading of all sessions. Returns human-readable notes about what changed (for the log)."""
+        notes: list[str] = []
+        apps = {s.app for s in sources}
+        for gone in [a for a in self._stable if a not in apps]:
+            del self._stable[gone]
+            self._since.pop(gone, None)
+        started: list[str] = []
+        for s in sources:
+            if not s.readable or s.state not in ("playing", "paused", "stopped"):
+                continue                                      # 'changing' / 'opened' blips (track changes) are not transitions
+            before = self._stable.get(s.app)
+            if s.state == "playing" and before != "playing":
+                self._since[s.app] = now
+                started.append(s.app)
+            elif s.state != "playing":
+                self._since.pop(s.app, None)
+            self._stable[s.app] = s.state
+        playing = [a for a, st in self._stable.items() if st == "playing"]
+        if playing:
+            self.last_playing = max(playing, key=lambda a: self._since.get(a, 0.0))
+        if started:
+            notes.append("started playing: " + ", ".join(started))
+
+        if self.mode is Mode.MANUAL_TEMP:
+            manual = _find(apps, self.manual)
+            others_started = [a for a in started if not _same(a, self.manual)]
+            others_playing = [a for a in playing if not _same(a, self.manual)]
+            if manual is None:
+                notes.append(self._to_auto(f"the selected session {self.manual} disappeared"))
+            elif others_started:
+                notes.append(self._to_auto(f"{others_started[0]} started playing"))
+            elif (self._stable.get(manual) != "playing" and others_playing
+                  and now - self.last_interaction >= self.idle_return_s):
+                notes.append(self._to_auto(f"no interaction with {manual} for {self.idle_return_s:.0f} s while {others_playing[0]} plays"))
+        return notes
+
+    # -- the user -------------------------------------------------------------------------------------------------------
+    def select(self, app: str, sources: list[Source], current: str, now: float) -> Mode:
+        """A vertical swipe landed on `app`. Landing on what AUTO would show anyway is simply AUTO."""
+        auto_first = candidate_order(sources, current=current, last_playing=self.last_playing, since=self._since)[:1]
+        if auto_first and _same(auto_first[0], app):
+            self._to_auto("")
+        else:
+            self.mode, self.manual, self.last_interaction = Mode.MANUAL_TEMP, app, now
+        return self.mode
+
+    def touch(self, now: float, app: str = "") -> None:
+        """The user dealt with the displayed session (a control, seek, volume, another swipe): restarts the idle timer."""
+        if self.mode is Mode.MANUAL_TEMP and (not app or _same(app, self.manual)):
+            self.last_interaction = now
+
+    def to_auto(self) -> None:
+        self._to_auto("")
+
+    def _to_auto(self, why: str) -> str:
+        self.mode, self.manual = Mode.AUTO, ""
+        return f"back to automatic: {why}" if why else ""
+
+    # -- the answer -----------------------------------------------------------------------------------------------------
+    def order(self, sources: list[Source], current: str = "", wanted: str = "") -> list[str]:
+        return candidate_order(sources, current=current, manual=self.manual if self.mode is Mode.MANUAL_TEMP else "",
+                               last_playing=self.last_playing, prefer=self.prefer, wanted=wanted, since=self._since)
 
 
 def ring(sources: list[Source], displayed: str = "") -> list[str]:

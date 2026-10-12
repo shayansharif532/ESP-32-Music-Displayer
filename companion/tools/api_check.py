@@ -24,7 +24,7 @@ def call(base: str, method: str, path: str) -> dict:
 
 def brief(now: dict) -> str:
     return (f"[{now.get('app')}] {now.get('title')!r} state={now.get('state')} source={now.get('source')!r} "
-            f"{now.get('source_index')}/{now.get('sources')} pinned={now.get('pinned')} can_play={now.get('can_play')} art={now.get('art_id')}")
+            f"{now.get('source_index')}/{now.get('sources')} mode={now.get('mode')} can_play={now.get('can_play')} art={now.get('art_id')}")
 
 
 def main() -> int:
@@ -68,7 +68,7 @@ def main() -> int:
         seen.append(here)
     check("a full forward lap returns to the start (wrap-around)", seen[-1] == start and sorted(set(seen)) == sorted(names), " -> ".join(seen))
     now = call(base, "GET", "/now-playing")
-    check("the display stays on the pinned session", now["app"] == start and now["pinned"] is True, brief(now))
+    check("the display stays on the selected session (nothing else started playing)", now["app"] == start and now["mode"] in ("manual", "auto"), brief(now))
 
     seen = [here]
     for _ in range(n):
@@ -88,7 +88,7 @@ def main() -> int:
         check(f"{action} aimed at a missing session is refused", r.get("ok") is False, json.dumps(r)[:120])
 
     r = call(base, "POST", "/control/source-auto")
-    check("back to automatic", r.get("ok") and r["now"]["pinned"] is False, brief(r["now"]))
+    check("back to automatic", r.get("ok") and r["now"]["mode"] == "auto", brief(r["now"]))
     print("\n%d failure(s)" % len(failures))
     return 1 if failures else 0
 

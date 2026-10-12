@@ -55,11 +55,16 @@ New-NetFirewallRule -DisplayName "Desk Media Companion" -Direction Inbound -Prot
   (the same slider as the Volume Mixer) - never the master volume (`tools/check_master_volume.py` proves it). The app's audio sessions are found by process name on every playback device. Chrome / Edge: all tabs share one audio
   process, so the whole browser changes; Firefox cannot be matched. Spotify's own in-app volume multiplies with the Windows one.
 * **Media sources** (`desk_media_companion/sources.py` = the model, `media.py` = the live sessions): the display can switch between every usable Windows media session (playing **and paused** ones that have a title or
-  artist; dead sessions are left out). `POST /control/source-next[?from=Spotify.exe]` / `source-prev` (a vertical swipe on the display) pin the display to the next / previous source in a fixed, wrapping order
-  (alphabetical by app name) and answer with the new `/now-playing`; `GET /sources` lists them; `POST /control/source-auto` returns to automatic (follow the best session). Once pinned, the display stays on that session
-  while it exists - another app becoming active does not take over - and falls back to automatic when it disappears. **Every control / volume request may carry `&app=<app id>`** (the display always does): the command then goes to
-  exactly that session and is refused (`"that media session is gone"`) if it no longer exists, never to another one.
-  `tools/api_check.py` exercises this without touching playback; `tools/session_test.py` is the full hardware test.
+  artist; dead sessions are left out). `POST /control/source-next[?from=Spotify.exe]` / `source-prev` (a vertical swipe on the display) select the next / previous source in a fixed, wrapping order (alphabetical by app name) and answer
+  with the new `/now-playing`; `GET /sources` lists them; `POST /control/source-auto` returns to automatic. **Selection is `AUTO` or `MANUAL_TEMP`**: AUTO follows the playing session that started playing most recently; a swipe makes the
+  chosen session a *temporary* manual selection that ends (back to AUTO) when another session starts playing, when the chosen session disappears, or - if it is paused while another one plays - after 20 s without touching it
+  (`MANUAL_IDLE_RETURN_S`). A background watcher looks at all sessions every 0.4 s. **Every control / volume request may carry `&app=<app id>`** (the display always does): the command then goes to exactly that session and is refused
+  (`"that media session is gone"`) if it no longer exists, never to another one.
+* **Spotify shuffle / repeat** (Spotify desktop only - identified by the session's app id): `/now-playing` carries `spotify`, `shuffle`, `repeat` (0 off, 1 playlist / album, 2 track), `can_shuffle`, `can_repeat`;
+  `POST /control/shuffle` and `/control/repeat` (also `/shuffle-on|off`, `/repeat-off|list|track`) use Windows' own session controls (`try_change_shuffle_active_async`, `try_change_auto_repeat_mode_async`) - no Spotify account or
+  OAuth - and are refused for every other app. `tools/dump_transport.py` shows what each session reports (read-only), `tools/probe_transport.py` proves a session accepts the changes (and restores them).
+  `tools/api_check.py` exercises source switching without touching playback; `tools/auto_follow_test.py` (isolated, two silent fake sessions) and `tools/session_test.py` (with the board) are the full tests.
+  Development flags: `--ignore-apps`, `--only-apps`, `--treat-as-spotify`, `--prefer-app`.
 
 ## Test without any media app
 
@@ -75,7 +80,7 @@ curl -X POST -H "X-Desk-Client: test" http://127.0.0.1:8765/control/next
 ## Known limits
 
 * Session choice (automatic mode): a *playing* session wins over a paused one; otherwise the app that played last, then the system's current session. Pausing one app while another plays moves the display to the playing one.
-  After a vertical swipe the choice is the user's (pinned) and does not move - see "Media sources" above. Two sessions with the same app id (e.g. two browser profiles reported under one id) appear as one source.
+  After a vertical swipe the choice is temporary (MANUAL_TEMP) - see "Media sources" above. Two sessions with the same app id (e.g. two browser profiles reported under one id) appear as one source.
 * Chrome / Edge artwork is at most ~150 px (Chromium requests it that way: `kDesiredImageSize = 150`); the companion enlarges it with a restrained edge-only sharpener (`artwork.enhance_upscale`), it cannot add detail.
   YouTube Music "topic" videos are a square cover inside a 16:9 frame, so the real picture can be < 90 px. A real high-resolution source would need a browser extension (see docs/milestones/M8c-session-switching.md); not built.
 * A paused browser tab may hold no audio session, so the side-button volume shows "No volume control" until it plays again.

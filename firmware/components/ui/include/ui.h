@@ -25,6 +25,8 @@ typedef enum {
     UI_CMD_PLAY_PAUSE,
     UI_CMD_NEXT,
     UI_CMD_SEEK,            /* arg = target position in ms */
+    UI_CMD_SHUFFLE,         /* Spotify only: the small shuffle button beside "previous" */
+    UI_CMD_REPEAT,          /* Spotify only: the small repeat button beside "next" (cycles off / playlist / track) */
     UI_CMD_SOURCE_NEXT,     /* vertical swipe up:   switch to the next media source (app / session) on the PC */
     UI_CMD_SOURCE_PREV,     /* vertical swipe down: switch to the previous one */
 } ui_cmd_t;
@@ -63,6 +65,11 @@ void ui_set_status(ui_status_level_t level, const char *text);
 /* Brief translucent "Volume 65%" pill (about one second, then it fades). percent < 0: the displayed app has no volume to
  * control ("No volume control"), -2: the PC did not answer; muted shows "Muted". No permanent screen space is used. */
 void ui_show_volume(int percent, bool muted);
+
+/* Spotify's shuffle / repeat buttons. They exist only while the displayed session is Spotify (spotify = false hides them and
+ * leaves the screen exactly as for every other app). repeat: 0 off, 1 playlist / album, 2 track. can_*: Spotify allows the change
+ * right now (the button is dimmed otherwise). Cheap to call on every poll: nothing is redrawn unless something changed. */
+void ui_set_spotify_controls(bool spotify, bool can_shuffle, bool can_repeat, bool shuffle, int repeat);
 
 /* How many media sources the PC currently offers (a vertical swipe only does something when there are at least two). */
 void ui_set_sources(int count);

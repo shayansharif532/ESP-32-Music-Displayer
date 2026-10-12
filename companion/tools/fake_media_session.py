@@ -5,7 +5,7 @@ without playing any sound, so the companion and the ESP32 can be tested end to e
         --art-dir DIR      use the images in DIR as the covers of the tracks (see make_test_covers.py)
         --silent-audio     also open a silent audio stream, so per-app volume can be tested (the session is python.exe)
         --paused           start paused (a paused session must not take over a display that follows the playing one)
-        --app-id NAME      give the session its own app id (default: python.exe), to test with several fake sources
+        (a second fake source needs a second executable name: see tools/start_fakes.ps1, which runs a renamed copy of python.exe)
 
 Needs:  pip install winrt-Windows.Media.Playback winrt-Windows.Media.Core
 """
@@ -81,6 +81,10 @@ class Fake:
             if hasattr(s, name):
                 setattr(s, name, True)
         s.add_button_pressed(self.on_button)
+        if hasattr(s, 'add_shuffle_enabled_change_requested'):            # behave like Spotify: shuffle on/off and repeat off / track / list
+            s.add_shuffle_enabled_change_requested(self.on_shuffle)
+            s.add_auto_repeat_mode_change_requested(self.on_repeat)
+            s.shuffle_enabled = False
         if hasattr(s, 'add_playback_position_change_requested'):
             s.add_playback_position_change_requested(self.on_seek)
         self.publish_track()
@@ -109,6 +113,14 @@ class Fake:
             self.t_ref = time.monotonic()
             print("button", b, "-> track", self.idx, "playing", self.playing, flush=True)
             self.publish_state()
+
+    def on_shuffle(self, sender, args) -> None:
+        self.smtc.shuffle_enabled = bool(args.requested_shuffle_enabled)
+        print("shuffle ->", self.smtc.shuffle_enabled, flush=True)
+
+    def on_repeat(self, sender, args) -> None:
+        self.smtc.auto_repeat_mode = args.requested_auto_repeat_mode
+        print("repeat ->", self.smtc.auto_repeat_mode, flush=True)
 
     def on_seek(self, sender, args) -> None:
         with self.lock:
@@ -173,11 +185,6 @@ def main() -> None:
     paused = "--paused" in args
     if paused:
         args.remove("--paused")
-    if "--app-id" in args:
-        i = args.index("--app-id")
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(args[i + 1])
-        del args[i:i + 2]
     if "--silent-audio" in args:
         args.remove("--silent-audio")
         start_silent_audio()

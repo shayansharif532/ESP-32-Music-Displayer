@@ -18,7 +18,11 @@
                                    screen. -> {"ok":true,"changed":true,"app":"chrome.exe","source":"Chrome","index":1,"count":2,
                                    "now":{...the new /now-playing...}}; changed=false when there is only one source)
     POST /control/source-auto      back to automatic (follow the best session)
-    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|pinned
+    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|manual
+    POST /control/shuffle[?app=Spotify.exe]   Spotify only: toggle shuffle (also /shuffle-on /shuffle-off)
+    POST /control/repeat[?app=...]            Spotify only: cycle repeat off -> list -> track -> off (also /repeat-off /repeat-list /repeat-track)
+                                   -> {"ok":true,"app":"Spotify.exe","spotify":true,"shuffle":true,"repeat":1,"can_shuffle":true,"can_repeat":true,"now":{...}}
+                                   refused (ok:false) for every other app. /now-playing carries spotify, shuffle, repeat (0 off, 1 list, 2 track), can_shuffle, can_repeat.
     GET  /health
 
 Safety rails: only private/loopback clients are served; the Host header must be an IP address (blocks DNS
@@ -39,7 +43,8 @@ from .media import MediaMonitor
 
 log = logging.getLogger("http")
 
-CONTROL_ACTIONS = {"playpause", "play", "pause", "next", "previous", "seek"}
+CONTROL_ACTIONS = {"playpause", "play", "pause", "next", "previous", "seek",
+                   "shuffle", "shuffle-on", "shuffle-off", "repeat", "repeat-off", "repeat-list", "repeat-track"}   # last 7: Spotify only
 VOLUME_ACTIONS = {"volume-up", "volume-down"}
 SOURCE_ACTIONS = {"source-next", "source-prev", "source-auto"}
 _HOST_IP = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^\[[0-9a-fA-F:]+\](:\d+)?$|^localhost(:\d+)?$")
@@ -55,7 +60,7 @@ def _client_allowed(addr: str) -> bool:
 
 DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
                  "swipe_right", "swipe_left", "swipe_up", "swipe_down", "swipe_diag", "swipe_bar", "swipe_bar_v", "swipe_text",
-                 "touch_cover", "touch_play", "key_up", "key_down", "keyhold_up", "keyhold_down",
+                 "touch_cover", "touch_play", "touch_shuffle", "touch_repeat", "key_up", "key_down", "keyhold_up", "keyhold_down",
                  "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                  "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"}
 
@@ -189,7 +194,10 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                 except ValueError:
                     self._json(400, {"ok": False, "error": "position_ms required"})
                     return
-            self._json(200, monitor.control(action, position, shown_app))
+            result = monitor.control(action, position, shown_app)
+            if action.startswith(("shuffle", "repeat")):                 # Spotify's buttons: the answer carries the fresh state
+                result["now"] = monitor.now_playing()
+            self._json(200, result)
 
     class Server(ThreadingHTTPServer):
         daemon_threads = True

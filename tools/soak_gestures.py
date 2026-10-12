@@ -19,7 +19,7 @@ FAKE = "python.exe"
 SELECTION_ONLY = {"swipe_up", "swipe_down"}
 ACTIONS = [
     ("swipe_right", 4), ("swipe_left", 4), ("swipe_up", 4), ("swipe_down", 3), ("swipe_diag", 2), ("swipe_bar", 2), ("swipe_bar_v", 2),
-    ("swipe_text", 3), ("touch_cover", 3), ("touch_play", 2), ("key_up", 3), ("key_down", 3), ("keyhold_down", 1), ("keyhold_up", 1),
+    ("swipe_text", 3), ("touch_cover", 3), ("touch_play", 2), ("touch_shuffle", 2), ("touch_repeat", 2), ("key_up", 3), ("key_down", 3), ("keyhold_down", 1), ("keyhold_up", 1),
 ]
 
 
