@@ -105,3 +105,7 @@ Thumbs.db
 desktop.ini
 .claude/settings.local.json
 .claude/*.local.*
+
+# Companion packaging output (PyInstaller)
+dist/
+*.spec

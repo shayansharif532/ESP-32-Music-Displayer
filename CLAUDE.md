@@ -1,14 +1,25 @@
 # CLAUDE.md
 
-## Project: ESP32 Spotify Now Playing Gift Display
+## Project: ESP32 Desk Media (Now Playing) Gift Display
 
 ### Purpose
 
-Build a polished, standalone Spotify "Now Playing" touchscreen desk display as a birthday gift.
+Build a polished, standalone "Now Playing" touchscreen desk display (for the recipient's Windows PC) as a birthday gift.
 
-The device should feel like a finished consumer product, not a development board. It will show the current Spotify track, album art, artist, playback progress, and touch controls. It will also include a Cyberpunk / Night City-inspired idle screen and a one-time birthday intro.
+The device should feel like a finished consumer product, not a development board. It shows what the recipient's **Windows PC** is currently playing - title, artist / channel, artwork, playback progress - and gives touch controls (play/pause, previous, next, seek). It will also include a Cyberpunk / Night City-inspired idle screen and a one-time birthday intro.
 
-The device does **not** need to output audio. It acts as a Spotify status display and remote controller for playback occurring on another Spotify device.
+The device does **not** output audio. It is a status display and remote controller for the **active Windows media session**, whatever app produces it (Spotify desktop, YouTube / YouTube Music in a browser, VLC, Apple Music, ...).
+
+---
+
+## ARCHITECTURE CHANGE (owner decision, 2026-10-12) - read this first
+
+**Spotify OAuth / the Spotify Web API is no longer the architecture.** The device is only for the recipient's Windows PC, so:
+
+- A small **Windows companion app** (`companion/`, Python + WinRT `Windows.Media.Control` / GlobalSystemMediaTransportControlsSessionManager) detects the active media session, and serves title / artist / album / playback state / position / duration / artwork over a small **HTTP API on the local network** (`GET /now-playing`, `GET /artwork`, `POST /control/{playpause,next,previous,seek}`).
+- The **ESP32 firmware polls the companion** (it finds the PC automatically through a UDP beacon) and sends control commands back. No Spotify account, Client ID, Premium, tokens, TLS or internet access is needed.
+- The old Spotify client is **obsolete**: it is kept, not built, in `legacy/` (commit `db51d85`). Do not revive it unless the owner asks.
+- Authoritative design + protocol: `docs/ARCHITECTURE.md`; decision record: ADR-003 in `docs/DECISIONS.md`. Wherever the rest of this file still says "Spotify", read it as "the companion / Windows media session" - the sections below have been updated, and the milestone numbers below are the **current plan**.
 
 ---
 
@@ -44,7 +55,8 @@ Preferred stack:
 - **ESP-IDF 5.5.5**
 - **LVGL 9.5.0**
 - Waveshare BSP **2.0.0**
-- Windows development machine
+- Windows development machine (also the machine that runs the companion during development)
+- **Windows companion:** Python 3.12, `winrt-*` packages, Pillow, psutil (`companion/requirements.txt`); packaged later as a single `.exe` (PyInstaller)
 - ESP-IDF installed under `C:\esp`
 - Espressif tools installed under `C:\Espressif`
 - esptool 5.5.0 available in the project-local environment
@@ -54,7 +66,7 @@ Why ESP-IDF instead of Arduino:
 - 480 x 480 RGB framebuffer uses PSRAM.
 - Stable RGB display + Wi-Fi/TLS benefits from explicit `sdkconfig` control.
 - Waveshare's maintained ESP-IDF BSP path is preferred for this board.
-- ESP-IDF provides first-class HTTPS, NVS, networking, captive portal primitives, JPEG support, FreeRTOS task control, etc.
+- ESP-IDF provides first-class HTTP, NVS, networking, captive portal primitives, JPEG support, FreeRTOS task control, etc.
 
 Do not migrate to Arduino unless there is a strong technical reason and it is documented first.
 
@@ -150,108 +162,47 @@ Completed:
 - Diagnostic touch support was added for physical validation.
 
 Before assuming touch calibration is perfect on another build, preserve or rerun the touch diagnostic if needed.
+(See "Known issues" at the end: the M1 demo crashed on some touches. The M2 display config - 24 KB LVGL stack, one draw unit - is our answer; a pristine-demo gate on 2026-10-12 ran 7 minutes without a crash.)
+
+### Milestone 2 - BUILT, boots; long touch soak still owed
+
+Own 480x480 UI in `firmware/components/ui` (placeholder art box, title, artist, seek bar, elapsed/total, prev/play-pause/next, tap-art full-screen toggle, status line). Evidence: `docs/milestones/M2-ui.md`.
+
+### Milestones 3-7 - BUILT on branch `feature/mvp`, tested end to end against a *test* media session
+
+Wi-Fi + auto-reconnect (verified: link dropped and recovered in ~2 s), the Windows companion, discovery, now-playing, artwork, commands. Evidence: `docs/milestones/MVP-media-companion.md`. **Still pending: the MVP gate with real Spotify desktop and YouTube-in-a-browser playback.**
 
 ---
 
 ## Remaining Milestones
 
-### Milestone 2 — Custom 480 x 480 UI + Touch
+### Milestone 2 - Custom 480 x 480 UI + Touch (done, see status above)
 
-Goal:
+Required prototype screen: album-art placeholder, song title, artist, progress bar, elapsed / total time, previous, play/pause, next, full-screen-art toggle. Acceptance includes a multi-minute touch soak with zero resets (the health log line's `touches=` counter proves taps happened).
 
-- Replace the generic Waveshare demo with the initial music-display UI.
-- Confirm LVGL layout, fonts, buttons, image container, progress bar, and touch interactions.
+### Milestone 3 - Wi-Fi (done in firmware)
 
-Required prototype screen:
+Stable Wi-Fi with automatic reconnect (exponential back-off). Credentials: temporary developer credentials only in the git-ignored `firmware/secrets.local.h` (`tools/set-dev-secrets.ps1`); never in the product, never committed, never logged.
 
-- album-art placeholder
-- song title
-- artist
-- progress bar
-- elapsed / total time
-- previous
-- play/pause
-- next
-- full-screen-art toggle
+### Milestone 4 - Windows companion (replaces "HTTPS/API")
 
-Do not add Spotify yet.
+`companion/`: GSMTC wrapper, HTTP API, UDP discovery beacon, per-user auto-start option. Runs quietly in the background. See `docs/ARCHITECTURE.md` for the protocol.
 
-### Milestone 3 — Wi-Fi
+### Milestone 5 - ESP32 <-> companion: now-playing + progress (replaces "Spotify authentication")
 
-Goal:
+`firmware/components/pc_media`: discovery, poll `/now-playing` about once per second, keep UI responsive (UI interpolates progress locally). Never block the LVGL task.
 
-- Establish stable Wi-Fi networking.
-- Test reconnect behavior.
-- Avoid hard-coded credentials in the final product.
+### Milestone 6 - Album artwork
 
-Hard-coded temporary developer credentials are acceptable only for a short development test and must not be committed.
+The companion normalises any thumbnail to a square 300x300 **baseline** JPEG (near-square art is cropped, wide art letterboxed so nothing is cut off); the ESP32 downloads it only when `art_id` changes and decodes it into two fixed PSRAM buffers (no allocation churn). Album art should be the visual focus of the product.
 
-### Milestone 4 — HTTPS/API
+### Milestone 7 - Playback controls
 
-Goal:
+Previous / play-pause / next / seek via `POST /control/...`, applied by the companion to the same media session. Gracefully handle: nothing playing, app refuses a control (`ok:false`), companion unreachable (PC asleep / app closed / firewall), Wi-Fi loss.
 
-- Confirm outbound HTTPS/TLS.
-- Validate certificate/time requirements.
-- Perform a harmless test API request.
-- Keep networking asynchronous enough that LVGL remains responsive.
+### MVP gate (before any polish)
 
-### Milestone 5 — Spotify Authentication + Current Track
-
-Use Spotify Web API.
-
-Preferred auth:
-
-- **Authorization Code with PKCE**
-
-Do not use:
-- Spotify username/password storage
-- Implicit Grant
-- embedded personal credentials
-- committed client secrets/tokens
-
-The final owner must authorize their own Spotify account.
-
-Spotify platform details can change. Before implementing authentication or playback control, verify current Spotify developer rules from official Spotify documentation.
-
-Expected capabilities:
-
-- current track
-- artist
-- duration
-- progress
-- playback state
-- active device information where available
-
-### Milestone 6 — Album Artwork
-
-Goal:
-
-- Download and display album artwork.
-- Preserve aspect ratio.
-- Decode/scale efficiently for 480 x 480.
-- Avoid repeated large allocations.
-- Cache/reuse artwork where practical.
-
-Album art should be the visual focus of the product.
-
-### Milestone 7 — Playback Controls
-
-Implement:
-
-- Previous
-- Play
-- Pause
-- Next
-- Seek via progress bar if reliable
-
-Gracefully handle:
-
-- no active playback device
-- paused playback
-- API failure
-- expired authorization
-- rate limiting
-- Wi-Fi loss
+Works with **Spotify desktop** and **YouTube in a supported browser**: real artwork, title + artist/channel, working progress bar, play/pause, next/previous where the media session supports them.
 
 ### Milestone 8 — Polished Main UI
 
@@ -318,18 +269,22 @@ Final user onboarding should not require a PC.
 
 Preferred flow:
 
-1. Device starts setup mode if Wi-Fi / Spotify auth is missing.
+1. Device starts setup mode if Wi-Fi is not configured (or the PC companion is not paired).
 2. Device creates a temporary setup AP.
 3. User connects from phone.
 4. Local/captive setup page opens.
 5. User selects Wi-Fi and enters password.
 6. Device stores Wi-Fi credentials securely in NVS.
-7. Device presents a Spotify authorization flow.
-8. User authorizes Spotify.
+7. Display and PC companion pair (shared token) so the LAN API is not open to every device.
+8. (reserved)
 9. Device returns to normal Now Playing mode.
 10. Future boots reconnect automatically.
 
-Provide an easy reset/reconfiguration path.
+Provide an easy reset/reconfiguration path. The companion and the display should also **pair** (shared token) so the LAN API is no longer open to every device on the network.
+
+### Milestone 12 - Companion packaging (new)
+
+Single `.exe` (PyInstaller) for the recipient, auto-start with Windows (`--install-startup`, per-user Run key), a one-time Windows Firewall helper (the first run asks to allow the port; a script that adds a rule needs the owner's UAC click - Claude must not change system/firewall settings itself), tray/quit option, update story.
 
 ---
 
@@ -344,9 +299,9 @@ Boot
   ↓
 Connect Wi-Fi
   ↓
-Restore / refresh Spotify authorization
+Find the Windows companion (UDP beacon) / reconnect
   ↓
-Fetch playback state
+Poll the PC's media session
   ↓
 Now Playing OR Idle
 ```
@@ -357,10 +312,9 @@ The board should recover gracefully from:
 
 - router unavailable at boot
 - temporary Wi-Fi loss
-- internet loss
-- Spotify temporarily unavailable
-- token expiration
-- no active Spotify device
+- PC asleep / companion closed / PC firewall blocking (show "Can't reach your PC", keep retrying)
+- the PC's IP address changing (re-discover)
+- no active media session
 - playback stops
 - playback resumes
 - malformed / missing album artwork
@@ -386,7 +340,7 @@ Main screen should contain:
 
 Optional after core functionality is stable:
 
-- current Spotify Connect device
+- source app of the media session (already shown in the status line)
 - volume if reliable
 - shuffle/repeat state
 
@@ -409,33 +363,22 @@ Tap again:
 
 Keep modules separated. Exact naming may change, but preserve the separation of concerns.
 
-Suggested structure:
+Actual structure (current):
 
 ```text
+companion/                      Windows companion (Python)
+  desk_media_companion/         media.py (GSMTC), server.py (HTTP API), discovery.py (UDP beacon), autostart.py, __main__.py
+  tools/fake_media_session.py   silent test media session
 firmware/
-  main/
-    app_main.*
-    app_state.*
-    display/
-    touch/
-    ui/
-      screens/
-        now_playing.*
-        idle.*
-        setup.*
-        birthday.*
-    network/
-      wifi.*
-      http.*
-    spotify/
-      spotify_client.*
-      spotify_auth.*
-      spotify_models.*
-    storage/
-      settings.*
-      nvs_store.*
-    assets/
+  main/                         main.c (glue), app_config.h, health.c, demo_player.c (UI-only demo)
+  components/
+    ui/                         LVGL Now Playing screen (later: screens/{idle,setup,birthday})
+    wifi_mgr/                   Wi-Fi STA + reconnect + SNTP
+    pc_media/                   companion discovery + polling + artwork + commands
+legacy/                         obsolete Spotify client (not built)
 ```
+
+Planned additions: `screens/idle`, `screens/birthday`, `screens/setup`, `storage/` (NVS settings).
 
 Avoid a single giant application file.
 
@@ -454,19 +397,14 @@ NETWORK_ERROR
 AUTH_ERROR
 ```
 
-Playback model should include at least:
+Playback model (`pc_media_state_t`) includes at least:
 
 ```text
-track_id
-track_name
-artist_name
-album_name
-album_art_url
-duration_ms
-progress_ms
-is_playing
-device_id
-device_name
+has_session, playing, state, app (source app id)
+title, artist (or channel), album
+position_ms, duration_ms
+track_id, art_id
+can_play, can_pause, can_next, can_prev, can_seek
 ```
 
 UI must render from state rather than mixing API/network operations directly into button drawing logic.
@@ -487,7 +425,7 @@ Rules:
 - Prefer state changes/messages between network and UI tasks.
 - Measure free heap / PSRAM during major changes.
 - Watch watchdog timing.
-- Do not poll Spotify absurdly fast.
+- Do not poll the companion absurdly fast (about once per second is plenty; the UI interpolates).
 - Keep touch responsive during network requests.
 
 ---
@@ -496,10 +434,9 @@ Rules:
 
 Never commit:
 
-- Spotify access tokens
-- Spotify refresh tokens
-- OAuth authorization codes
 - Wi-Fi passwords
+- any pairing token for the companion API (Milestone 11)
+- Spotify tokens / client secrets (obsolete, but the rule stands if the legacy code is ever revived)
 - API credentials
 - private keys
 - factory flash dump
@@ -517,9 +454,9 @@ sdkconfig.local
 
 These must be git-ignored.
 
-If a Spotify client ID is safe to expose under the chosen PKCE flow, still keep environment-specific configuration separate from product source where practical.
+Keep environment-specific configuration separate from product source (`secrets.local.h`, NVS). The companion's LAN API is unauthenticated for the MVP, so it is fenced (LAN-only clients, IP-literal Host header, required `X-Desk-Client` header on POSTs) and exposes only media metadata plus four transport actions.
 
-Never print refresh/access tokens to the normal serial log.
+Never print credentials or tokens to the normal serial log.
 
 ---
 
@@ -536,7 +473,7 @@ Good examples:
 ```text
 milestone 2: initial 480x480 now playing UI
 milestone 3: add stable wifi connection and reconnect
-milestone 5: add spotify PKCE auth and playback state
+milestone 5: esp32 polls the windows companion for now-playing
 fix: prevent album art heap fragmentation
 ```
 
@@ -686,17 +623,14 @@ They may be future enhancements, but they must not delay the core music-display 
 
 ## Immediate Next Task
 
-Current next milestone:
+State on 2026-10-12: milestones 2-7 are built on `feature/mvp` and work end to end against a test media session. Next:
 
-**Milestone 2 — build the custom 480 x 480 non-Spotify Now Playing UI and verify touch behavior.**
+1. Run the **MVP gate** with real media: Spotify desktop and YouTube in Chrome/Edge (artwork, title/artist, progress, play/pause, next/previous).
+2. A long **touch soak** on the network build (screen edges, rapid taps, seek drags; zero resets; the health line's `touches=` counter).
+3. Merge `feature/mvp` into `main` once 1 and 2 pass; write `docs/milestones/MVP-media-companion.md` results.
+4. Then M8 (polish + full-screen art), M9, M10, M11, M12 in that order.
 
-Before starting:
-
-1. inspect current branch/status
-2. read Milestone 1 documentation
-3. preserve the known-good display/touch configuration
-4. build the custom UI on top of that verified hardware layer
-5. do not begin Spotify integration until the UI prototype is stable
+Before starting: `git status`, `git log --oneline -10`, read `docs/ARCHITECTURE.md` and the latest milestone doc.
 
 
 
