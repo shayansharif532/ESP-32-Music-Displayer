@@ -36,13 +36,15 @@ Sources: developer.spotify.com — *February 2026 Web API Dev Mode Changes (Migr
 * **Premium.** Every **Development Mode** app needs its **owner** (the Spotify account that created the app on the developer
   dashboard) to have an active **Premium** subscription — if it lapses, the app stops working. Separately, the playback *control*
   endpoints (play / pause / next / previous / seek) only work for Premium **listeners**; reading "now playing" works for free accounts.
-* **Users.** A Development Mode app is limited to **5 users** (new apps) and **1 Client ID per developer** (a July 2026 note raises it to 25).
-  The friend's Spotify account must be added under *User Management* in the app (name + the e-mail of their Spotify account) before
-  they can authorise.
+* **Users / Client IDs.** A Development Mode app is limited to **5 users per app** (still applies). The Feb 2026 change allowed only
+  1 Client ID per developer, but Spotify's **July 2026 update raised that to 25 Client IDs per developer account** (confirmed by the
+  owner), so creating one dedicated app per recipient is fine. The recipient's Spotify account must be added under *User Management*
+  in that app (name + the e-mail of their Spotify account) before they can authorise.
 * **Endpoints.** The February 2026 changes removed/changed library, batch-lookup, browse and playlist-item endpoints. The **Player**
   endpoints we use (`GET /me/player`, `GET /me/player/currently-playing`, play/pause/next/previous/seek, devices) are **not** in the
   removed/changed list. We re-verify live in Milestone 5.
-* **OAuth.** Authorization Code **with PKCE** (no client secret ever on the device; implicit grant is gone). Redirect URIs must be
+* **OAuth.** Authorization Code **with PKCE** is the only flow we implement — **never Implicit Grant** (owner's explicit requirement;
+  Spotify also removed it in Nov 2025). No client secret ever on the device. Redirect URIs must be
   **HTTPS**, except loopback IP literals (`http://127.0.0.1[:port]`, `http://[::1]`); `localhost` and plain-HTTP LAN addresses
   are rejected; matching is exact.
 * **Consequences for the design**
