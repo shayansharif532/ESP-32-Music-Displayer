@@ -37,6 +37,16 @@ def set_rts(ser: serial.Serial, state: bool) -> None:
     ser.dtr = ser.dtr          # same workaround as esptool's reset code ("dummy change to DTR")
 
 
+def detect_port() -> str:
+    """Find the board's port (ESP32-S3 USB-Serial/JTAG = VID 303A, PID 1001) instead of assuming COM5."""
+    from serial.tools import list_ports
+
+    found = [p.device for p in list_ports.comports() if (p.vid, p.pid) == (0x303A, 0x1001)]
+    if len(found) == 1:
+        return found[0]
+    sys.exit(f"cannot auto-detect the board ({'none found' if not found else 'several: ' + ', '.join(found)}); pass --port")
+
+
 def open_port(port: str, reset: bool) -> serial.Serial:
     ser = serial.Serial()
     ser.port = port
@@ -59,13 +69,15 @@ def open_port(port: str, reset: bool) -> serial.Serial:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", default="COM5")
+    ap.add_argument("--port", default="auto", help="serial port, or 'auto' = detect the ESP32-S3 (VID 303A / PID 1001)")
     ap.add_argument("--seconds", type=float, default=15.0, help="how long to listen")
     ap.add_argument("--reset", action="store_true", help="reset into the app first (normal boot)")
     ap.add_argument("--out", help="append every line to this file as well")
     ap.add_argument("--until", help="stop early once a line matches this regex (exit 2 if it never does)")
     ap.add_argument("--max-lines", type=int, default=300, help="max lines echoed to stdout (the file gets everything)")
     args = ap.parse_args()
+    if args.port == "auto":
+        args.port = detect_port()
 
     until = re.compile(args.until) if args.until else None
     fout = open(args.out, "a", encoding="utf-8", buffering=1) if args.out else None

@@ -1,24 +1,107 @@
-# --- local toolchains / virtualenvs -----------------------------------------
-tools/venv/
-.espressif/
-.cache/
+# =============================================================================
+# ESP32 Spotify Now-Playing display - git ignore policy
+#
+#   NOTHING secret and NOTHING large / device-specific is ever pushed:
+#     * factory flash dumps stay on the owner's own machines (see backup/factory/MANIFEST.md)
+#     * Wi-Fi passwords and Spotify tokens / codes / secrets live only in the device's NVS
+#       or in local, ignored files - never in source, logs or commits
+#     * vendor downloads and build output are re-creatable (see README "Set up a new computer")
+#
+#   If a rule here blocks something that really must be committed (e.g. a firmware
+#   asset that happens to be a .bin), add a narrow "!negation" below or `git add -f`
+#   it - and say why in the commit message.
+# =============================================================================
 
-# --- build output ------------------------------------------------------------
+# --- 1. FACTORY FIRMWARE / FLASH DUMPS (never push) --------------------------------
+# The whole-chip backup is a 16 MiB, device-specific image. Only its hashes and the
+# restore steps (backup/factory/MANIFEST.md) are committed.
+backup/factory/*
+!backup/factory/MANIFEST.md
+backup/**/*.bin
+*.bin
+*.dump
+*.img
+*.rom
+*.nvs
+
+# --- 2. SECRETS, CREDENTIALS, PERSONAL CONFIG (never push) -------------------------
+# Wi-Fi passwords, Spotify access/refresh tokens, authorization codes, client secrets,
+# private keys. Only templates named *.example.* may be committed.
+.env
+.env.*
+!.env.example
+secrets.*
+!secrets.example.*
+secrets.local.h
+*.secret
+*.secrets
+*.local
+*.local.*
+!*.local.example
+!*.local.example.*
+sdkconfig.local
+sdkconfig.local.*
+local.properties
+credentials*.json
+credentials*.txt
+client_secret*.json
+wifi*.json
+wifi*.txt
+*token*.json
+*token*.txt
+*token*.dat
+*token*.env
+*.token
+*.tokens
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# --- 3. ESP-IDF BUILD OUTPUT (re-creatable) ----------------------------------------
+# firmware/dependencies.lock is NOT ignored on purpose: it pins the exact component versions.
 build/
+managed_components/
 sdkconfig
 sdkconfig.old
-managed_components/
+compile_commands.json
 
-# --- vendor downloads (large, third-party licensed; see docs/HARDWARE.md#sources) ---
+# --- 4. LOCAL TOOLCHAINS / VIRTUALENVS / CACHES (re-creatable) ---------------------
+tools/venv/
+venv/
+.venv/
+.espressif/
+.cache/
+.ccache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --- 5. LARGE VENDOR DOWNLOADS (re-fetch per README; third-party licensed) ---------
 docs/waveshare/
 
-# --- the factory flash dump: 16 MiB, device specific, may contain Wi-Fi data of
-#     whoever used the board before. Keep it OUT of git (and out of any public
-#     repo) but DO copy it somewhere safe. Its hashes live in backup/factory/MANIFEST.md.
-backup/factory/*.bin
-backup/**/*.bin
+# --- 6. LOGS / CAPTURES / TEMPORARY FILES ------------------------------------------
+# Serial logs can contain Wi-Fi names, device IDs or (if a bug logs them) tokens.
+*.log
+logs/
+captures/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+eim.log
 
-# --- secrets: nothing secret is ever compiled in, but just in case ----------
-secrets.*
-*.secret
-.env
+# --- 7. EDITOR / OS / AGENT-LOCAL FILES --------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/settings.local.json
+.claude/*.local.*

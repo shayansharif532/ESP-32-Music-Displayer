@@ -1,0 +1,16 @@
+# Same line endings on every machine: LF in the repository AND in working trees,
+# so a clone on Windows, Linux or macOS produces identical files (and identical
+# hashes for the files that must match Waveshare's originals, see firmware/NOTICE.md).
+* text=auto eol=lf
+
+# Genuinely binary assets (none today; listed so future images/fonts are never "fixed" by git).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.ttf  binary
+*.otf  binary
+*.woff binary
+*.woff2 binary
+*.pdf  binary
