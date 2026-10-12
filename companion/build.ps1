@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
   Builds companion\dist\DeskMediaCompanion.exe (single file, no console window, no Python needed on the target PC).
+  Includes the tray icon (pystray) and the Idle Screen settings window (tkinter / Tcl-Tk).
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1
@@ -26,7 +27,8 @@ try {
         --hidden-import winrt.windows.foundation.collections `
         --collect-submodules pycaw `
         --collect-submodules comtypes `
-        --exclude-module tkinter --exclude-module unittest --exclude-module pydoc `
+        --hidden-import pystray._win32 --collect-submodules pystray `
+        --exclude-module unittest --exclude-module pydoc `
         run_companion.py
 } finally {
     Pop-Location

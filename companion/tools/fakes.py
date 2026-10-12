@@ -14,7 +14,8 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-VENV_PY = os.path.join(ROOT, "companion", ".venv", "Scripts", "python.exe")
+VENV = os.environ.get("DESK_VENV") or os.path.join(ROOT, "companion", ".venv")        # DESK_VENV: another checkout's venv (git worktrees)
+VENV_PY = os.path.join(VENV, "Scripts", "python.exe")
 FAKE = os.path.join(ROOT, "companion", "tools", "fake_media_session.py")
 ART_DIR = os.path.join(ROOT, "logs", "test-art2")
 SECOND_DIR = os.path.join(ROOT, "logs", "fake2")
@@ -22,7 +23,7 @@ SECOND_EXE = os.path.join(SECOND_DIR, "deskfakeb.exe")
 
 
 def _python_home() -> str:
-    with open(os.path.join(ROOT, "companion", ".venv", "pyvenv.cfg"), encoding="utf-8") as f:
+    with open(os.path.join(VENV, "pyvenv.cfg"), encoding="utf-8") as f:
         for line in f:
             if line.startswith("home"):
                 return line.split("=", 1)[1].strip()
@@ -49,7 +50,7 @@ def start_fake(app: str = "python.exe", paused: bool = False, silent_audio: bool
         _ensure_second_exe()
         exe = SECOND_EXE
         env["PYTHONHOME"] = _python_home()
-        env["PYTHONPATH"] = os.path.join(ROOT, "companion", ".venv", "Lib", "site-packages")
+        env["PYTHONPATH"] = os.path.join(VENV, "Lib", "site-packages")
     out = open(log_path, "w") if log_path else subprocess.DEVNULL
     return subprocess.Popen([exe, *args], stdout=out, stderr=subprocess.STDOUT, env=env)
 

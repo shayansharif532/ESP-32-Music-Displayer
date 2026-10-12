@@ -2,7 +2,7 @@
 
 A birthday-gift desk display for the recipient's **Windows PC**: it shows and controls whatever the PC is playing — Spotify desktop,
 YouTube / YouTube Music in a browser, VLC, Apple Music, … (it makes no sound itself) — big square artwork, title, artist / channel,
-progress/seek, play-pause-previous-next, and a Cyberpunk-Edgerunners-style idle screen with a clock.
+progress/seek, play-pause-previous-next, and a customisable idle screen (clock, themes, your own background picture) for when nothing is playing.
 
 How: a small **Windows companion** ([`companion/`](companion/)) reads the PC's active *media session* and serves it over the home LAN; the
 ESP32 finds it automatically and polls it. **No Spotify account, Client ID, Premium, OAuth or tokens** — see
@@ -51,7 +51,7 @@ Chrome / Edge change the volume of the whole browser (all tabs share one audio s
 |---|---|
 | Orientation / rules for Claude Code sessions | [`CLAUDE.md`](CLAUDE.md) |
 | **Architecture + companion HTTP protocol** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md), [M8c](docs/milestones/M8c-session-switching.md), [M8d](docs/milestones/M8d-auto-follow-spotify-options.md) |
+| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md), [M8c](docs/milestones/M8c-session-switching.md), [M8d](docs/milestones/M8d-auto-follow-spotify-options.md), [M9](docs/milestones/M9-idle-screen.md) |
 | Hardware facts, verified pin map, sources | [`docs/HARDWARE.md`](docs/HARDWARE.md) |
 | Decisions: framework (ADR-001), companion architecture (ADR-003), obsolete Spotify rules (ADR-002) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | **Windows companion app** | [`companion/`](companion/) |
@@ -196,7 +196,7 @@ stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milest
 | 8b | **Refinement pass**: widescreen art as a landscape card, Spotify logo removed, swipe gestures (right = next, left = previous), per-app Windows volume, side buttons = volume up / down | **done** - see [M8b doc](docs/milestones/M8b-art-layout-gestures-volume.md) |
 | 8c | **Media-source switching**: horizontal swipes reversed (left = next, right = previous), vertical swipes switch between the PC's media sessions (playing or paused), every command targets the session on screen, sharper Chrome / YouTube thumbnails (PC-side) | **done** - see [M8c doc](docs/milestones/M8c-session-switching.md) |
 | 8d | **Auto-follow restored + Spotify shuffle / repeat**: a manual source swipe is only temporary (auto-follow returns when another app starts playing, the selection closes, or after 20 s idle), Spotify-only shuffle and repeat buttons through Windows' own session controls (no Spotify login) | **done** - see [M8d doc](docs/milestones/M8d-auto-follow-spotify-options.md) |
-| 9 | Cyberpunk idle screen (nothing playing) | next |
+| 9 | **Customisable idle screen** (nothing playing): Minimal / Dark / Neon / Photo themes, accent colour, clock, one custom line, your own background picture (Fill / Fit / Blur Fill), all set in the companion's tray **Settings** window and cached on the display; fades to / from the player | **built and verified on hardware**, awaiting the owner's physical review - see [M9 doc](docs/milestones/M9-idle-screen.md) |
 | 10 | Full-screen album-art polish | |
 | 11 | First-run Wi-Fi setup | |
 | 12 | Companion installer (single `.exe`, auto-start, firewall helper) | |

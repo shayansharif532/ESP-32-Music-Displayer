@@ -3,4 +3,8 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, ,        8M,
-storage,  data, spiffs,  ,        7M,
+# idle_img: the idle screen's background picture (a 480x480 JPEG sent by the companion, see components/idle_screen). Raw access, no
+# file system: a 4 KB header sector + the JPEG. It was carved out of the unused 7 MB "storage" partition (nothing referenced it);
+# the app and NVS offsets are unchanged, so a normal flash keeps the Wi-Fi / idle settings in NVS.
+idle_img, data, 0x40,    ,        1M,
+storage,  data, spiffs,  ,        6M,

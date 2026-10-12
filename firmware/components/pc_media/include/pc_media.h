@@ -35,6 +35,11 @@ typedef struct {
     bool     shuffle;           /* shuffle is on */
     uint8_t  repeat;            /* 0 = off, 1 = repeat the playlist / album, 2 = repeat the track */
     bool     can_shuffle, can_repeat;
+    /* Idle screen (see components/idle_screen): nothing plays anywhere on the PC, the version of the PC's idle settings, and the
+     * PC's local time (ms since the epoch; 0 = not sent). An older companion sends none of these: any_playing then follows `playing`. */
+    bool     any_playing;
+    uint32_t idle_v;
+    int64_t  clock_ms;
 } pc_media_state_t;
 
 typedef enum {
@@ -72,6 +77,12 @@ typedef struct {
     /* Development only: a one-shot request from the companion's /debug route ("screenshot", "tap_next", ...). */
     void (*on_debug)(const char *what, void *ctx);
     void (*on_status)(pc_media_status_t status, const char *detail, void *ctx);
+    /* Idle-screen settings sync (all optional; called from the poll task, only when the PC's settings version changed):
+     * idle_have(v) = the display already holds exactly that version; idle_config(json, len) gets GET /idle and returns 1 = "now send
+     * me the picture", 0 = applied, -1 = unusable; idle_picture(jpeg, len) gets GET /idle/image and returns false to ask for a retry. */
+    bool (*idle_have)(uint32_t version, void *ctx);
+    int (*idle_config)(const char *json, size_t len, void *ctx);
+    bool (*idle_picture)(const uint8_t *jpeg, size_t len, void *ctx);
     void *ctx;
 } pc_media_callbacks_t;
 

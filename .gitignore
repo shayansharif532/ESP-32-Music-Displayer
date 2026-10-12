@@ -109,3 +109,17 @@ desktop.ini
 # Companion packaging output (PyInstaller)
 dist/
 *.spec
+
+# --- 9. PERSONAL IDLE-SCREEN CUSTOMISATION (never push) --------------------------------------------------------------
+# The companion keeps a user's idle screen (settings file + chosen picture) in %LOCALAPPDATA%\DeskMediaCompanion\idle, outside the
+# repository. These patterns catch the same files (and any personal photo / theme asset) should they ever end up inside a checkout,
+# e.g. through `--data-dir`. A personalised theme is a local asset, not part of the generic product.
+**/idle/settings.json
+**/idle/background.jpg
+**/idle/original.bin
+**/idle-assets/
+**/personal/
+**/private/
+*.private.*
+idle-settings*.json
+idle_background*

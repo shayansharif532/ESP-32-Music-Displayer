@@ -6,7 +6,7 @@
 
 Build a polished, standalone "Now Playing" touchscreen desk display (for the recipient's Windows PC) as a birthday gift.
 
-The device should feel like a finished consumer product, not a development board. It shows what the recipient's **Windows PC** is currently playing - title, artist / channel, artwork, playback progress - and gives touch controls (play/pause, previous, next, seek). It will also include a Cyberpunk / Night City-inspired idle screen.
+The device should feel like a finished consumer product, not a development board. It shows what the recipient's **Windows PC** is currently playing - title, artist / channel, artwork, playback progress - and gives touch controls (play/pause, previous, next, seek). It also has a customisable idle screen (clock, themes, the user's own background picture) for when nothing is playing.
 
 The device does **not** output audio. It is a status display and remote controller for the **active Windows media session**, whatever app produces it (Spotify desktop, YouTube / YouTube Music in a browser, VLC, Apple Music, ...).
 
@@ -16,7 +16,7 @@ The device does **not** output audio. It is a status display and remote controll
 
 The **birthday intro is dropped** - do not work on it. Current priority order after the MVP:
 
-A. Main player visual redesign (done, Milestone 8) -> B. Cyberpunk idle screen (M9) -> C. Full-screen album-art polish (M10) -> D. First-run Wi-Fi setup (M11) -> E. Companion installer (M12) -> F. Pairing / security (M13).
+A. Main player visual redesign (done, Milestone 8) -> B. Customisable idle screen (M9, built; replaced the earlier Cyberpunk-idle plan - a personal theme is a local asset, not part of the generic product) -> C. Full-screen album-art polish (M10) -> D. First-run Wi-Fi setup (M11) -> E. Companion installer (M12) -> F. Pairing / security (M13).
 
 ---
 
@@ -280,21 +280,15 @@ Owner's third refinement request, after using M8c ("a manual swipe must not disa
   `companion/tools/fakes.py` - so cases A-E and the Spotify buttons run through the real companion and the real Windows API without touching the owner's apps or display); dev flags `--ignore-apps`, `--only-apps`, `--treat-as-spotify`;
   `tools/session_test.py` is the board-in-the-loop version. Rule: while developing, restart the product companion with `--ignore-apps python.exe,deskfakeb.exe` so fake sessions never reach the owner's display.
 
-### Milestone 9 — Cyberpunk Idle Screen
+### Milestone 9 - Customisable idle screen (BUILT 2026-10-12; evidence: `docs/milestones/M9-idle-screen.md`; ADR-007)
 
-When no active playback exists, switch to a custom idle interface inspired by futuristic Night City / cyberpunk UI.
+Replaces the generic "Nothing playing" player placeholder when the PC companion is connected and nothing plays. A **generic product feature**: no theme is fandom-specific; a user's photo / name / personal theme is local data chosen on their own PC and never committed.
 
-Visual direction:
-
-- dark background
-- restrained yellow / cyan / red accent use
-- digital clock
-- subtle futuristic UI elements
-- message such as `NO ACTIVE PLAYBACK`
-
-Do not turn the interface into a cluttered anime collage.
-
-Avoid embedding copyrighted art unless the user explicitly provides an asset they have the right to use. Original cyberpunk-inspired UI is preferred.
+- **Screens**: boot / Wi-Fi / searching / PC unreachable = the player screen with its connection message (never idle); connected + something plays = player; connected + nothing plays (no session or only paused ones) = **idle screen** after a configurable delay (default 4 s; at once when nothing has played since connecting), left **immediately** when anything plays; 350 ms fades; tap the idle screen to peek at a paused session's player for 30 s.
+- **Companion** (`idle.py`, `ui.py`): tray icon + Settings window (tkinter, pystray): theme Minimal / Dark / Neon / Photo, accent, clock (12/24 h), one custom line, delay, Photo background with Fill / Fit / Blur Fill and a live preview; settings in `%LOCALAPPDATA%\DeskMediaCompanion\idle`; pictures validated and rendered to a 480x480 baseline JPEG <= 200 KB on the PC; `GET /idle`, `GET /idle/image`; `/now-playing` gains `any_playing`, `idle_v`, `clock_ms`. Settings are editable only in-process (no HTTP write route).
+- **Firmware** (`components/idle_screen`): its own LVGL screen; settings in NVS, picture in the new `idle_img` flash partition (carved out of the unused `storage`); version-based sync from `pc_media` (only when `idle_v` differs); dithered gradients for the built-in themes, photo decoded once + dithered; generated large clock font (`tools/gen_clock_font.py`); fallbacks to the Dark theme for any picture problem.
+- **Personal / generic separation (owner rule)**: the framework is committed; personal assets are not. `.gitignore` blocks `idle/settings.json`, `idle/background.jpg`, `idle/original.bin`, `idle-assets/`, `personal/`, `private/`. Before committing anything near this feature, grep the staged files for personal names and image file names.
+- Test tooling: `tools/idle_test.py` (board-in-the-loop with an in-process companion that sees only two silent fake sessions: transitions, delay, picture + reboot persistence, companion restart, Fill / Fit / Blur Fill by pixel checks, the clock against the real typeface, corrupt pictures, and a repeated idle <-> playback soak with heap / stack / reset accounting).
 
 ### Milestone 10 - Full-screen album-art polish
 
@@ -419,6 +413,7 @@ firmware/
   components/
     ui/                         LVGL Now Playing screen (later: screens/{idle,setup})
     wifi_mgr/                   Wi-Fi STA + reconnect + SNTP
+    idle_screen/                the customisable idle screen (own LVGL screen, NVS + idle_img partition cache, generated clock font)
     pc_media/                   companion discovery + polling + artwork + commands
     side_keys/                  the two side buttons (BOOT GPIO0, PWR via AXP2101 over I2C) as volume down / up
 legacy/                         obsolete Spotify client (not built)
@@ -679,7 +674,7 @@ and the Milestone 8d pass (auto-follow restored after manual swipes, Spotify-onl
 (see `docs/milestones/MVP-media-companion.md`, `M8-player-redesign.md`, `M8b-art-layout-gestures-volume.md`, `M8c-session-switching.md`, `M8d-auto-follow-spotify-options.md`). Next, in this order:
 
 1. Collect the owner's feedback on the refined screen (spacing, sizes, gesture feel, the PWR-key check, fallback font for non-Latin titles - many YouTube titles have them) and fix what they point out.
-2. B. M9 Cyberpunk idle screen (shown when nothing is playing; clock; `NO ACTIVE PLAYBACK`) - the owner asked not to start it before the 8b pass was complete.
+2. M9 customisable idle screen: **built**; waiting for the owner's physical review (look of the themes, the fade, tap-to-peek, a picture of their own). `main` is only fast-forwarded after that.
 3. C. M10 full-screen album-art polish.
 4. D. M11 first-run Wi-Fi setup (reset gesture = long press of BOOT while running, NOT at power-up), E. M12 companion installer / auto-start / firewall helper, F. M13 pairing + security.
 5. A targeted touch stress soak (top band, edges, rapid taps) before the product is finalised.

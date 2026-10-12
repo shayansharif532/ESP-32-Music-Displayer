@@ -23,6 +23,11 @@
     POST /control/repeat[?app=...]            Spotify only: cycle repeat off -> list -> track -> off (also /repeat-off /repeat-list /repeat-track)
                                    -> {"ok":true,"app":"Spotify.exe","spotify":true,"shuffle":true,"repeat":1,"can_shuffle":true,"can_repeat":true,"now":{...}}
                                    refused (ok:false) for every other app. /now-playing carries spotify, shuffle, repeat (0 off, 1 list, 2 track), can_shuffle, can_repeat.
+    GET  /idle                     the idle-screen settings (theme, accent, clock, custom line, delay, picture info) + their version
+    GET  /idle/image               the background picture for the Photo theme: a ready-made 480x480 baseline JPEG (X-Idle-Crc = CRC-32);
+                                   404 when no picture is set. /now-playing carries `idle_v` (the settings version: the display
+                                   re-fetches /idle when it differs from the one it stored), `any_playing` (false = nothing plays
+                                   anywhere -> idle screen) and `clock_ms` (the PC's local time as ms since the epoch, for the clock).
     GET  /health
 
 Safety rails: only private/loopback clients are served; the Host header must be an IP address (blocks DNS
@@ -39,6 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from .idle import IdleStore, crc32, local_clock_ms
 from .media import MediaMonitor
 
 log = logging.getLogger("http")
@@ -65,7 +71,7 @@ DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
                  "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"}
 
 
-def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> ThreadingHTTPServer:
+def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False, idle: IdleStore | None = None) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "DeskMediaCompanion/" + __version__
@@ -107,6 +113,8 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
             url = urlparse(self.path)
             if url.path == "/now-playing":
                 snap = monitor.now_playing()
+                if idle is not None:                           # per request, not cached with the snapshot: the clock moves on
+                    snap = dict(snap, idle_v=idle.version, clock_ms=local_clock_ms())
                 if dev_tools:
                     pending = monitor.take_debug()
                     if pending:
@@ -132,6 +140,14 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                     self._send(304, b"", "image/jpeg", {"ETag": etag})
                 else:
                     self._send(200, jpeg, "image/jpeg", {"ETag": etag, "X-Art-Id": art_id})
+            elif url.path == "/idle" and idle is not None:
+                self._json(200, idle.config())
+            elif url.path == "/idle/image" and idle is not None:
+                data = idle.image()
+                if data is None:
+                    self._json(404, {"ok": False, "error": "no idle picture"})
+                else:
+                    self._send(200, data, "image/jpeg", {"X-Idle-Crc": str(crc32(data))})
             elif url.path == "/volume":
                 self._json(200, monitor.volume("get", app=parse_qs(url.query).get("app", [""])[0][:96]))
             elif url.path == "/sources":

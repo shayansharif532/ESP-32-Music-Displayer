@@ -88,6 +88,7 @@ class MediaMonitor:
         self.ignore_apps: set[str] = set()   # dev only: never look at these app ids (keeps fake test sessions off the real display)
         self.only_apps: set[str] = set()     # dev only: ignore every session except these app ids (isolated tests next to the owner's real apps)
         self.spotify_ids: set[str] = set()   # dev only: extra app ids treated as Spotify (--treat-as-spotify python.exe, the fake session)
+        self._any_playing = False          # some usable session is playing right now (the display leaves its idle screen for it)
         self._debug_lock = threading.Lock()
         self._debug_request = ""          # dev tools: one-shot request handed to the display with the next /now-playing
 
@@ -287,6 +288,7 @@ class MediaMonitor:
             cur_app = ""
         for note in self.sel.observe(srcs, time.monotonic()):         # who started playing / disappeared; may end MANUAL_TEMP
             log.info("selection: %s", note)
+        self._any_playing = any(src_model.is_usable(s) and s.state == "playing" for s in srcs)
         return srcs, objs, cur_app
 
     # ---- snapshot -------------------------------------------------------------------------------
@@ -404,6 +406,7 @@ class MediaMonitor:
                 "can_seek": bool(ctl.is_playback_position_enabled),
             }
             snap.update(self._transport_fields(app, info))
+            snap["any_playing"] = self._any_playing         # false = nothing plays anywhere: the display may show its idle screen
             sig = f"{app}|{state}|{track_key}|{self._art_id}"
             if sig != self._last_sig:
                 self._last_sig = sig
@@ -426,7 +429,7 @@ class MediaMonitor:
                 "title": "", "artist": "", "album": "", "position_ms": 0, "duration_ms": 0,
                 "track_id": "", "art_id": "", "can_play": False, "can_pause": False, "can_next": False,
                 "can_prev": False, "can_seek": False, "spotify": False, "shuffle": False, "repeat": 0,
-                "can_shuffle": False, "can_repeat": False, "seq": self._seq}
+                "can_shuffle": False, "can_repeat": False, "any_playing": self._any_playing, "seq": self._seq}
 
     def _mode_for(self, app: str) -> str:
         return "manual" if self.sel.mode is src_model.Mode.MANUAL_TEMP and self.sel.manual.lower() == app.lower() else "auto"

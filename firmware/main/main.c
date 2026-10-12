@@ -25,6 +25,7 @@
 #include "demo_player.h"
 #include "dev_tools.h"
 #include "health.h"
+#include "idle_screen.h"
 #include "pc_media.h"
 #include "side_keys.h"
 #include "ui.h"
@@ -78,9 +79,100 @@ static void on_source(const char *name, int index, int count, void *ctx)
 
 /* ---- companion events -> UI (called from the pc_media poll task) ----------------------------------------- */
 
-static char s_shown_track[16];       /* track id currently on screen, "" = idle screen */
-static bool s_idle_shown;
+static char s_shown_track[16];       /* track id currently on screen, "" = the player shows a message instead of a track */
+static bool s_idle_shown;            /* ... such a message: "Starting...", "Looking for your PC", "Nothing playing" */
+static bool s_link_idle;             /* ... and it is a connection message (Wi-Fi / PC), not "nothing playing" */
 static char s_source[32];            /* friendly name of the app that is playing, shown in the status line */
+
+/* ---- player <-> idle screen --------------------------------------------------------------------------------
+ * Two LVGL screens. Rules (all decided here from what the companion reports):
+ *   PC not reachable / Wi-Fi / searching      -> the player screen with its connection message (never the idle screen)
+ *   PC connected, something plays             -> the player, at once (<= one poll)
+ *   PC connected, nothing plays               -> the idle screen, after the user's delay (default 4 s) so a gap between two
+ *                                                tracks does not flash it; at once when nothing has played since connecting
+ * Tapping the idle screen while a (paused) session exists brings the player back for PEEK_HOLD_MS (so a track paused from the
+ * display can be resumed); touching the player keeps it up the same way. */
+#define SCREEN_FADE_MS      350
+#define PEEK_HOLD_MS        30000
+
+static lv_obj_t *s_player_scr;
+static bool s_idle_visible;          /* the idle screen is (becoming) the visible one */
+static bool s_have_session;          /* the PC has a (maybe paused) media session */
+static int64_t s_last_playing_ms;    /* when something last played; 0 = not since connecting */
+static volatile uint32_t s_peek_until;   /* (uint32 ms) the player stays up until then even though nothing plays; 0 = no peek */
+static uint32_t s_last_touch;
+
+static int64_t now_ms(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
+static void show_screen(bool idle)
+{
+    if (!s_player_scr || idle == s_idle_visible || !bsp_display_lock(1000)) {
+        return;
+    }
+    s_idle_visible = idle;
+    idle_screen_activate(idle);
+    lv_screen_load_anim(idle ? idle_screen_obj() : s_player_scr, LV_SCREEN_LOAD_ANIM_FADE_IN, SCREEN_FADE_MS, 0, false);
+    bsp_display_unlock();
+    ESP_LOGI(TAG, "screen -> %s", idle ? "idle" : "player");
+}
+
+static void peek_arm(void)
+{
+    uint32_t t = (uint32_t)now_ms() + PEEK_HOLD_MS;
+    s_peek_until = t ? t : 1;
+}
+
+/* LVGL task: the idle screen was tapped. */
+static void on_idle_tap(void *ctx)
+{
+    (void)ctx;
+    if (s_have_session) {
+        peek_arm();
+        show_screen(false);
+    }
+}
+
+/* From the latest report of the PC: should the idle screen be showing? (Also keeps the timers.) */
+static bool idle_wanted(const pc_media_state_t *st)
+{
+    const int64_t now = now_ms();
+    const uint32_t touches = ui_touch_count();
+    const bool touched = touches != s_last_touch;
+    s_last_touch = touches;
+    if (st->any_playing) {
+        s_last_playing_ms = now;
+        s_peek_until = 0;
+        return false;
+    }
+    if (touched && !s_idle_visible) {
+        peek_arm();                                        /* somebody is using the player: leave it up */
+    }
+    if (s_peek_until && (int32_t)(s_peek_until - (uint32_t)now) > 0) {
+        return false;
+    }
+    return s_last_playing_ms == 0 || now - s_last_playing_ms >= (int64_t)idle_screen_delay_ms();
+}
+
+static bool on_idle_have(uint32_t version, void *ctx)
+{
+    (void)ctx;
+    return idle_screen_have_version(version);
+}
+
+static int on_idle_config(const char *json, size_t len, void *ctx)
+{
+    (void)ctx;
+    return idle_screen_apply_config(json, len);
+}
+
+static bool on_idle_picture(const uint8_t *jpeg, size_t len, void *ctx)
+{
+    (void)ctx;
+    return idle_screen_apply_picture(jpeg, len);
+}
 
 static bool ci_contains(const char *hay, const char *needle)
 {
@@ -121,19 +213,38 @@ static void idle_message(const char *l1, const char *l2)
 {
     s_shown_track[0] = '\0';
     s_idle_shown = true;
+    s_link_idle = false;
     ui_show_idle(l1, l2);
+}
+
+/* A connection message (Wi-Fi / looking for the PC / PC lost): on the player screen, which is brought forward if the idle screen was up. */
+static void link_message(const char *l1, const char *l2)
+{
+    idle_message(l1, l2);
+    s_link_idle = true;
+    s_last_playing_ms = 0;
+    s_peek_until = 0;
+    show_screen(false);
 }
 
 static void on_state(const pc_media_state_t *st, void *ctx)
 {
     (void)ctx;
+    idle_screen_set_clock(st->clock_ms);
+    s_have_session = st->has_session;
+    const bool want_idle = idle_wanted(st);
     if (!st->has_session) {
-        if (!s_idle_shown) {
-            idle_message("Nothing playing", "Play something on your PC");
-            s_source[0] = '\0';
-        }
+        if (want_idle) {
+            if (!s_idle_shown || s_link_idle) {              /* reset the player to its "nothing playing" placeholder under the idle screen */
+                idle_message("Nothing playing", "Play something on your PC");
+                s_source[0] = '\0';
+            }
+            idle_screen_set_status("Nothing playing");
+            show_screen(true);
+        }                                                    /* else: a short gap - keep what is on screen until the delay is over */
         return;
     }
+    s_link_idle = false;
     ui_set_sources(st->sources);
     ui_set_spotify_controls(st->spotify, st->can_shuffle, st->can_repeat, st->shuffle, st->repeat);   /* Spotify only */
     if (strcmp(st->track_id, s_shown_track) != 0 || s_idle_shown) {
@@ -148,6 +259,8 @@ static void on_state(const pc_media_state_t *st, void *ctx)
     }
     ui_set_progress(st->position_ms, st->playing);
     ui_set_capabilities(st->can_prev, st->can_next, st->can_seek);
+    idle_screen_set_status("Paused - tap to show the player");
+    show_screen(want_idle);                                  /* something plays -> player (at once); nothing for a while -> idle */
 }
 
 static void on_art(const lv_image_dsc_t *art, const lv_image_dsc_t *bg, void *ctx)
@@ -171,13 +284,17 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
     case PC_MEDIA_WAITING_NETWORK:
         ui_set_status(UI_STATUS_INFO, "Connecting to Wi-Fi...");
         if (!s_shown_track[0]) {
-            idle_message("Connecting...", "");
+            link_message("Connecting...", "");
+        } else {
+            show_screen(false);
         }
         break;
     case PC_MEDIA_SEARCHING:
         ui_set_status(UI_STATUS_INFO, "Looking for your PC...");
         if (!s_shown_track[0]) {
-            idle_message("Looking for your PC", "Is Desk Media Companion running on it?");
+            link_message("Looking for your PC", "Is Desk Media Companion running on it?");
+        } else {
+            show_screen(false);
         }
         break;
     case PC_MEDIA_CONNECTED: {                         /* detail = the Windows app id of the session */
@@ -192,7 +309,11 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
     case PC_MEDIA_UNREACHABLE:
         ui_set_status(UI_STATUS_WARN, "Can't reach your PC");
         if (!s_shown_track[0]) {
-            idle_message("Can't reach your PC", "Is it on, and is Desk Media Companion running?");
+            link_message("Can't reach your PC", "Is it on, and is Desk Media Companion running?");
+        } else {
+            s_last_playing_ms = 0;
+            s_peek_until = 0;
+            show_screen(false);                              /* the warning belongs on the player, never on the idle screen */
         }
         break;
     }
@@ -267,6 +388,11 @@ void app_main(void)
 
     ui_init(on_ui_cmd, NULL);
     ui_show_idle("Starting...", "");
+    if (bsp_display_lock(0)) {
+        s_player_scr = lv_screen_active();                 /* the player screen; the idle screen is a second one (idle_screen.c) */
+        bsp_display_unlock();
+    }
+    idle_screen_init(on_idle_tap, NULL);
 
     ESP_ERROR_CHECK(wifi_mgr_init(on_wifi_state, NULL));
     ESP_ERROR_CHECK(wifi_mgr_connect(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));
@@ -279,6 +405,7 @@ void app_main(void)
         .cover_area = ui_art_area,
         .cbs = {
             .on_state = on_state, .on_art = on_art, .on_status = on_status, .on_volume = on_volume, .on_source = on_source,
+            .idle_have = on_idle_have, .idle_config = on_idle_config, .idle_picture = on_idle_picture,
 #ifdef APP_DEV_TOOLS
             .on_debug = on_debug,
 #endif

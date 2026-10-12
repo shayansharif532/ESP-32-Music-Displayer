@@ -106,6 +106,31 @@ Status: **accepted** (owner request after using M8c). Details and evidence: `doc
 * **UI**: two small buttons flank the transport row only while Spotify is shown (shuffle left of previous, repeat right of next); subtle when off, Spotify green with a dot when on, a "1" on the repeat icon for repeat-track, dimmed when Spotify
   does not allow the change; previous / play / next are exactly where they were; hidden in full-screen mode and for every other app.
 
+## ADR-007 — Customisable idle screen: the PC owns the configuration, the display caches it (2026-10-12) — **current**
+
+Status: **accepted** (owner request). Details and evidence: `docs/milestones/M9-idle-screen.md`. It replaces the earlier plan for Milestone 9 (a Cyberpunk-styled idle screen) with a **generic, user-customisable product feature**; anything personal (a photo, a name, a fandom theme) is a local asset the user chooses on their own PC.
+
+* **Three screens, decided by what the companion reports.** Boot / Wi-Fi / searching / PC unreachable -> the player screen with its connection message (never the idle screen).
+  PC connected and something plays -> the player. PC connected and **nothing plays** (no session, or only paused / stopped ones) -> the idle screen.
+  The companion adds `any_playing` to `/now-playing` (some *usable* session is playing - not just the displayed one, so a paused source swiped to manually while another plays does not blank the display).
+* **Leaving idle is immediate** (the next poll, <= 1 s, normal auto-source-detection then picks the session); **entering idle waits** for the user's delay (default 4 s, 2-60 s) of continuous "nothing plays", so the gap between two tracks or a
+  browser changing video never flashes it. Nothing has played since connecting -> idle at once. Two LVGL screens, a 350 ms fade between them (`lv_screen_load_anim`, no layers / blur / extra buffers).
+* **Tap-to-peek.** A paused session would otherwise be unreachable (pause on the display, 4 s later it is idle, no play button). Tapping the idle screen while a session exists shows the player for 30 s (touching the player keeps it up the same way); with no session a tap does nothing.
+* **The companion owns the configuration** (`companion/desk_media_companion/idle.py`): theme (Minimal / Dark / Neon / Photo), accent colour, show clock + 12/24 h, one custom text line, the delay, and for Photo a background picture with Fill / Fit / Blur Fill.
+  It lives in `%LOCALAPPDATA%\DeskMediaCompanion\idle\` (outside any repository; `.gitignore` also blocks the file names should they land in a checkout). It is edited **only in-process** (tray icon -> Settings window, `ui.py`) - there is no HTTP route that changes it, so nothing on the LAN can.
+  A single `version` number changes with every real change.
+* **The display caches, the PC does not resend.** Every `/now-playing` answer carries `idle_v`. When it differs from the version stored on the display (`!=`, so a reset companion also resyncs) the display fetches `GET /idle` (settings JSON incl. the picture's size + CRC-32) and, only if the CRC changed, `GET /idle/image`.
+  Persistence: settings in **NVS**, the picture in a new **`idle_img` 1 MB flash partition** (header sector written last, so an interrupted write means "no picture"; CRC re-checked on every load). A reboot of either side therefore needs no transfer.
+  Partition table change (documented as required by CLAUDE.md): `idle_img` (1 MB, data/0x40) was carved out of the unused 7 MB `storage` (now 6 MB, nothing references it); `nvs` and `factory` keep their offsets, so Wi-Fi/NVS data survive a flash.
+* **All picture work is on the PC.** JPG / PNG only (<= 25 MB, <= 89 MP, sides 16..20 000 px, format checked, EXIF rotation, transparency matted on black); cropped / fitted / blurred to exactly 480x480 and encoded as a **baseline JPEG <= 200 KB** (the ESP32's decoder is baseline-only). The display never sees an original.
+  On the display the JPEG is decoded once to RGB888 and **dithered** to RGB565 in PSRAM (smooth blurred areas must not band), kept as one image LVGL only blits; buffers are swapped in under the LVGL lock, never rewritten on screen.
+  Built-in themes are dithered gradients generated on the display (Neon adds an accent-coloured glow), so no per-theme image is stored or sent.
+* **Fallbacks, never a broken screen.** A missing / corrupt / undecodable / wrongly-sized picture -> the built-in **Dark** theme; an undecodable picture is not downloaded again for the same CRC (no retry loop); a failed transfer is retried with a back-off (5 s, 15 s, then every minute); a corrupt stored picture is re-requested.
+* **Clock.** `clock_ms` = the PC's local wall-clock time (UTC + offset, ms since the epoch) in every `/now-playing` answer; the display re-bases a software clock on each answer and ticks a 1 s timer only while the idle screen is visible, rewriting the label only when the minute changes. DST needs nothing on the display.
+  The big digits are a generated font (`tools/gen_clock_font.py`: Montserrat Medium 128 px, digits + colon, tabular), since LVGL's built-in Montserrat stops at 48 px. The custom line is sanitised to printable ASCII on the PC (and again on the display): the fonts have nothing else.
+* **Rejected:** storing the picture as raw RGB565 (460 KB, 4x the transfer and flash wear for no visible gain); decoding on every idle entry (a 150-300 ms hiccup at the moment of the fade); settings over an HTTP POST (an unauthenticated LAN could change them before pairing exists, Milestone 13); a full-screen LVGL layer / blur for photo legibility (a plain 30 % dim object is enough);
+  animating the idle screen (it must be nearly free next to Wi-Fi and the player).
+
 ## ADR-002 — Spotify: rules that shape the design (verified against Spotify's own pages, 2026-10-11) — **OBSOLETE, superseded by ADR-003**
 
 *Kept for the record in case a Spotify-API mode is ever revived.*

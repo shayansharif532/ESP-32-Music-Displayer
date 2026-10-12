@@ -66,6 +66,27 @@ New-NetFirewallRule -DisplayName "Desk Media Companion" -Direction Inbound -Prot
   `tools/api_check.py` exercises source switching without touching playback; `tools/auto_follow_test.py` (isolated, two silent fake sessions) and `tools/session_test.py` (with the board) are the full tests.
   Development flags: `--ignore-apps`, `--only-apps`, `--treat-as-spotify`, `--prefer-app`.
 
+## Idle screen settings (tray icon)
+
+While the companion runs there is an icon in the Windows notification area (next to the clock; it may be under the `^` arrow). Right-click or double-click it
+-> **Settings...** opens the *Idle Screen* window - no command line, no config file to edit:
+
+| Setting | What it does |
+|---|---|
+| Theme | **Minimal** (near-black), **Dark** (default: soft gradient), **Neon** (violet gradient, accent glow, glowing clock), **Photo** (your picture) |
+| Accent colour | seven presets or **Custom...** - the line under the clock, the small connection dot, the Neon glow |
+| Photo background | **Choose Image...** (JPG or PNG) with **Fill** (covers the screen), **Fit** (the whole picture, dark bars) or **Blur Fill** (blurred copy fills the screen, the sharp picture in front). It is resized and prepared here - the display never receives your original. Without a picture the Photo theme shows Dark |
+| Show clock / 24-hour | a large digital clock (the PC's local time) |
+| Custom line | one line of text under the clock (letters, numbers, basic punctuation; accents are simplified, other scripts dropped - the display fonts cannot draw them) |
+| Show idle screen after | how long nothing must have played before the idle screen appears (2-60 s, default 4 s) |
+
+The window shows a preview (before you press **Apply**); the display picks the change up within a second and keeps it in its own flash, so it survives a reboot of the display, the companion or Windows.
+The settings live in `%LOCALAPPDATA%\DeskMediaCompanion\idle\` (`settings.json`, the prepared `background.jpg`, a copy of your original) - never in the repository.
+The tray menu also has **Start with Windows** and **Quit**. Options: `--no-tray` (no icon, e.g. tests), `--open-settings` (open the window at start), `--data-dir DIR` (keep the idle data elsewhere).
+Needs `pystray` (in `requirements.txt`); without it the companion still runs, just without the icon.
+
+On the display: tap the idle screen while a (paused) session exists to bring the player back for 30 s; anything that starts playing brings it back at once.
+
 ## Test without any media app
 
 ```powershell

@@ -41,6 +41,8 @@ tokens or internet access is involved.
 | Component | Where | Responsibility |
 |---|---|---|
 | Windows companion | `companion/desk_media_companion/` | session selection, now-playing snapshot with extrapolated position, artwork clean-up and aspect-preserving rendering (`artwork.py`), controls, **per-app volume (`volume.py`, Core Audio sessions)**, HTTP API, discovery beacon, auto-start |
+| Idle-screen settings (companion) | `companion/desk_media_companion/idle.py`, `ui.py` | the user's idle-screen configuration (theme, accent, clock, custom line, delay, background picture + Fill / Fit / Blur Fill), stored in `%LOCALAPPDATA%\DeskMediaCompanion\idle`, with all picture validation / cropping / encoding; the system-tray icon and the Settings window (tkinter + pystray); `GET /idle`, `GET /idle/image` |
+| `idle_screen` | `firmware/components/idle_screen/` | the idle screen (its own LVGL screen): themes, big clock (generated font), custom line, photo background; keeps the settings in NVS and the picture in the `idle_img` partition so it survives reboots; syncs from the companion only when the version changed |
 | `wifi_mgr` | `firmware/components/wifi_mgr/` | station Wi-Fi, exponential-backoff reconnect, SNTP (for the future clock), credentials RAM-only, nothing sensitive logged |
 | `pc_media` | `firmware/components/pc_media/` | listens for the beacon (or uses a fixed IP), polls `/now-playing` (time-scheduled, never starved by commands), fetches + decodes artwork (square or landscape, up to 432x320) into two fixed PSRAM buffers, queues commands (volume commands coalesced), reports link status and volume results |
 | `side_keys` | `firmware/components/side_keys/` | the two side buttons: BOOT (GPIO0) and PWR (AXP2101 key flags polled over I2C) as volume down / up, debounce, hold-repeat (capped at 3 s) |
@@ -65,6 +67,8 @@ Base: `http://<pc-ip>:8765` (port configurable). All JSON is UTF-8.
 | `POST /control/shuffle` · `/control/repeat` (`&app=<app id>`; also `/shuffle-on` `/shuffle-off` `/repeat-off` `/repeat-list` `/repeat-track`) | **Spotify only** (identified by the session's app id): toggle shuffle / cycle repeat off -> playlist -> track -> off through Windows' own session controls. `{"ok":true,"app":"Spotify.exe","spotify":true,"shuffle":true,"repeat":1,"can_shuffle":true,"can_repeat":true,"now":{<fresh /now-playing>}}`; `ok:false` + `"error":"shuffle / repeat are only offered for Spotify"` for every other app |
 | `GET /volume` | the **per-application** volume of the displayed app (its Windows audio-session volume, never the master volume): `{"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}`; `ok:false` + `"error":"no audio session found for ..."` when the app has none |
 | `POST /control/volume-up` · `/control/volume-down` (`?step=5`, `&app=<app id>`) · `POST /volume?level=0..100` | same answer with the new volume. `app` = the app the display is showing; the volume goes to that app's audio session and is refused if it no longer has a media session (no `app`: the session the companion would show). Core Audio session mapping and browser limits: `docs/milestones/M8b-art-layout-gestures-volume.md` |
+| `GET /idle` | the idle-screen settings: `{"ok":true,"version":7,"theme":"dark\|minimal\|neon\|photo","accent":"#4DA3FF","clock":true,"clock_24h":true,"text":"...","bg_mode":"fill\|fit\|blur","delay_s":4,"image":null \| {"v":3,"size":123456,"crc":1234567890,"w":480,"h":480}}` (ADR-007). Read-only: nothing on the LAN can change the settings, they are edited in the companion's own Settings window |
+| `GET /idle/image` | the Photo theme's background picture, a ready-made **480x480 baseline JPEG <= 200 KB** (`X-Idle-Crc` = its CRC-32, the same value as `image.crc`); 404 when none is set |
 | `GET /health` | `{"ok":true,"service":"desk-media-companion","version":"0.1.0"}` |
 
 `/now-playing` fields: `ok`, `version`, `has_session`, `app` (Windows app id, e.g. `Spotify.exe`, `Chrome`), `state`
@@ -73,6 +77,9 @@ Base: `http://<pc-ip>:8765` (port configurable). All JSON is UTF-8.
 the track changes), `art_id` (changes when the artwork changes; `""` = none), `can_play`, `can_pause`, `can_next`, `can_prev`,
 `can_seek`, `seq` (bumps on any visible change), and the source fields `source` (short app name, "Spotify" / "Chrome" / "Edge"), `sources` (how many
 sessions a vertical swipe can switch between), `source_index` (1-based position in that ring), `mode` (`"manual"` while this session is a temporary manual selection, else `"auto"`), and - for Spotify only - `spotify` (true), `shuffle`, `repeat` (0 off, 1 playlist / album, 2 track), `can_shuffle`, `can_repeat` (all false / 0 for every other app).
+
+Idle-screen fields of `/now-playing` (ADR-007): `any_playing` (some usable session is playing anywhere - the display shows its idle screen when this is false for the user's delay), `idle_v` (the settings version: the display
+fetches `/idle` when it differs from the one it stored) and `clock_ms` (the PC's local time as milliseconds since the epoch, UTC + offset, for the clock). Older companions send none of them (the display then follows `playing`, and shows no clock).
 
 Session choice (ADR-006): **AUTO** (the long-term mode) follows the playing session that started playing most recently (ties: the system's current session); when nothing plays, the app that played last, then the system's current session;
 broken sessions are skipped. A vertical swipe enters **MANUAL_TEMP**: the chosen session stays on screen until another session starts playing, the chosen session disappears, or - when the chosen session is not playing while another one is -
@@ -95,7 +102,8 @@ four transport actions is exposed. A pairing token (Milestone 13) is the planned
 | Wi-Fi down / reconnecting | status "Connecting to Wi-Fi..." (auto-reconnect with back-off 1→30 s) |
 | Companion not found yet | "Looking for your PC" |
 | Found earlier, now silent (PC asleep, companion closed, firewall) | last track stays, status "Can't reach your PC"; retries every 2 s; re-discovers if the PC's IP changes |
-| Companion up, nothing playing | "Nothing playing - Play something on your PC" |
+| Companion up, nothing playing (no session, or only paused ones) | the **idle screen** (ADR-007) after the user's delay (4 s by default; at once when nothing has played since connecting); tap it to bring the player back for 30 s when a paused session exists |
+| Idle picture missing / corrupt / undecodable | the built-in Dark theme; a failed transfer is retried (5 s, 15 s, then every minute) |
 | Artwork missing / not decodable | placeholder art; retried 3x per image, then given up on |
 | App refuses a control | command logged, UI corrects itself on the next poll |
 

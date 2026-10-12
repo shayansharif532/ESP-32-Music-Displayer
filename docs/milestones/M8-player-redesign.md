@@ -48,5 +48,5 @@ Layout (480x480): status line y 2, cover y 18..330 (x 84..396), title y 336 (26 
 * Fonts: Montserrat has no CJK / Cyrillic / emoji glyphs (many YouTube titles) - fallback font still to do.
 * Full-screen mode stretches the 312 px cover to 456 px (soft) - Milestone 10.
 * No fade between tracks (the background swaps instantly).
-* The idle / "nothing playing" screen still reuses this layout with a message - Milestone 9 replaces it with the Cyberpunk idle screen.
+* The idle / "nothing playing" screen still reuses this layout with a message - Milestone 9 replaces it with the customisable idle screen (shown only while the PC is connected and nothing plays).
 * The owner's own visual judgement of the new look is still to be collected.

@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
                                                    "for isolated tests next to real apps")
     ap.add_argument("--ignore-apps", default="", help="development only: never look at these app ids (comma separated), e.g. the fake test "
                                                      "sessions python.exe,deskfakeb.exe, so tests do not show up on the real display")
+    ap.add_argument("--no-tray", action="store_true", help="no system-tray icon / settings window (tests, headless runs)")
+    ap.add_argument("--open-settings", action="store_true", help="open the Idle Screen settings window at start (it is always reachable from the tray icon)")
+    ap.add_argument("--data-dir", default="", help="where the idle-screen settings and picture are kept (default: the DeskMediaCompanion folder in your Local AppData)")
     ap.add_argument("--probe", action="store_true", help="print the current media state once and exit")
     ap.add_argument("--install-startup", action="store_true", help="start automatically when you log in to Windows")
     ap.add_argument("--remove-startup", action="store_true", help="undo --install-startup")
@@ -77,9 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         print("artwork:", f"{len(art[1])} bytes (id {art[0]})" if art else "none")
         return 0
 
+    from .idle import IdleStore
+    store = IdleStore(os.path.join(args.data_dir, "idle") if args.data_dir else None)
+    log.info("idle screen settings: %s (version %d, theme %s)", store.dir, store.version, store.settings().theme)
+
     from .server import make_server
     try:
-        server = make_server(monitor, args.port, dev_tools=args.dev_tools)
+        server = make_server(monitor, args.port, dev_tools=args.dev_tools, idle=store)
     except OSError as exc:
         log.error("cannot listen on port %d (already running?): %s", args.port, exc)
         if sys.stderr is not None:
@@ -93,11 +100,24 @@ def main(argv: list[str] | None = None) -> int:
         beacon.start()
 
     log.info("Desk Media Companion %s listening on 0.0.0.0:%d (log: %s)", __version__, args.port, log_path)
+    tray = None
+    if not args.no_tray:
+        import threading
+        from . import ui
+        window = ui.SettingsWindow(store)
+        tray = ui.start_tray(window, on_quit=lambda: threading.Thread(target=server.shutdown, daemon=True).start())
+        if args.open_settings:
+            window.open()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if tray is not None:
+            try:
+                tray.stop()
+            except Exception:
+                pass
         if beacon:
             beacon.stop()
         server.server_close()

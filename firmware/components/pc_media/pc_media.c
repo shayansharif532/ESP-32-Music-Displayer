@@ -27,6 +27,7 @@ static const char *TAG = "pc_media";
 #define FAILS_BEFORE_LOST   3
 #define ART_MAX_BYTES       (160 * 1024)
 #define ART_RETRIES         3
+#define IDLE_IMG_MAX_BYTES  (300 * 1024)        /* the companion keeps the idle picture under 200 KB */
 #define BEACON_MAGIC        "DESKMEDIA1 "
 
 typedef struct {
@@ -52,8 +53,13 @@ static struct {
     bool status_valid;
     pc_resp_t resp;                     /* JSON / small replies */
     pc_resp_t art;                      /* JPEG download */
+    pc_resp_t idle_img;                 /* idle screen picture (allocated only while it is downloaded) */
+    unsigned idle_fails;                /* consecutive failed idle syncs (back-off) */
+    int64_t idle_retry_at;              /* no new sync attempt before this time */
     bool started;
 } s;
+
+static int64_t now_ms(void);
 
 /* ---- helpers ------------------------------------------------------------------------------------ */
 
@@ -94,6 +100,12 @@ static void jstr(const cJSON *obj, const char *key, char *out, size_t n)
     if (cJSON_IsString(v)) {
         copy_utf8(out, n, v->valuestring);
     }
+}
+
+static int64_t jint64(const cJSON *obj, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return (cJSON_IsNumber(v) && v->valuedouble > 0) ? (int64_t)v->valuedouble : 0;
 }
 
 static uint32_t jnum(const cJSON *obj, const char *key)
@@ -253,6 +265,53 @@ static void update_art(void)
     }
 }
 
+/* ---- idle screen settings --------------------------------------------------------------------------- */
+
+/* The companion's idle-screen settings changed (its version is in every /now-playing answer): fetch them (and the picture, if it
+ * changed) and hand them to the idle screen, which stores them in its own flash. Runs in the poll task: a settings change blocks the
+ * poll for a moment (the picture is under 200 KB), and a failure is retried with a back-off (5 s, 15 s, then every minute). */
+static void idle_sync(uint32_t remote_v)
+{
+    if (!remote_v || !s.cbs.idle_config || (s.cbs.idle_have && s.cbs.idle_have(remote_v, s.cbs.ctx))) {
+        s.idle_fails = 0;
+        return;
+    }
+    int64_t now = now_ms();
+    if (now < s.idle_retry_at) {
+        return;
+    }
+    char host[16];
+    uint16_t port;
+    if (!get_host(host, sizeof host, &port)) {
+        return;
+    }
+    bool ok = false;
+    esp_err_t err = pc_http_request(host, port, "/idle", false, 4000, &s.resp);
+    if (err == ESP_OK && s.resp.status == 200 && s.resp.body.data && !s.resp.body.truncated) {
+        int need = s.cbs.idle_config(s.resp.body.data, s.resp.body.len, s.cbs.ctx);
+        if (need == 0) {
+            ok = true;
+        } else if (need == 1 && s.cbs.idle_picture) {
+            pc_resp_init(&s.idle_img, IDLE_IMG_MAX_BYTES);
+            err = pc_http_request(host, port, "/idle/image", false, 10000, &s.idle_img);
+            if (err == ESP_OK && s.idle_img.status == 200 && !s.idle_img.body.truncated && s.idle_img.body.len > 100) {
+                ok = s.cbs.idle_picture((const uint8_t *)s.idle_img.body.data, s.idle_img.body.len, s.cbs.ctx);
+            } else {
+                ESP_LOGW(TAG, "idle picture download failed (%s, HTTP %d)", esp_err_to_name(err), s.idle_img.status);
+            }
+            pc_resp_free(&s.idle_img);
+        }
+    } else {
+        ESP_LOGW(TAG, "idle settings download failed (%s, HTTP %d)", esp_err_to_name(err), s.resp.status);
+    }
+    if (ok) {
+        s.idle_fails = 0;
+    } else {
+        s.idle_fails++;
+        s.idle_retry_at = now_ms() + (s.idle_fails <= 1 ? 5000 : (s.idle_fails == 2 ? 15000 : 60000));
+    }
+}
+
 /* ---- polling -------------------------------------------------------------------------------------- */
 
 /* A /now-playing JSON object -> state. Also used for the "now" object inside the answer to a source switch. */
@@ -283,6 +342,9 @@ static void parse_state(const cJSON *root, pc_media_state_t *ns)
     ns->repeat = ns->spotify ? (jnum8(root, "repeat") > 2 ? 0 : jnum8(root, "repeat")) : 0;
     ns->can_shuffle = ns->spotify && jbool(root, "can_shuffle");
     ns->can_repeat = ns->spotify && jbool(root, "can_repeat");
+    ns->any_playing = cJSON_GetObjectItemCaseSensitive(root, "any_playing") ? jbool(root, "any_playing") : ns->playing;
+    ns->idle_v = jnum(root, "idle_v");
+    ns->clock_ms = jint64(root, "clock_ms");
 }
 
 /* Makes `ns` the current state: status line and UI callback. (The artwork download follows separately: it takes a moment, and
@@ -330,6 +392,7 @@ static bool poll_once(void)
 
     apply_state(&ns);
     update_art();
+    idle_sync(ns.idle_v);
     if (dbg[0] && s.cbs.on_debug) {
         s.cbs.on_debug(dbg, s.cbs.ctx);
     }
@@ -564,7 +627,7 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     if (!s.host_static) {
         xTaskCreatePinnedToCore(discovery_task, "pc_discovery", 4096, NULL, 3, NULL, 0);
     }
-    if (xTaskCreatePinnedToCore(poll_task, "pc_poll", 8192, NULL, 3, NULL, 0) != pdPASS) {
+    if (xTaskCreatePinnedToCore(poll_task, "pc_poll", 12288, NULL, 3, NULL, 0) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
