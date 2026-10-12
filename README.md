@@ -2,7 +2,7 @@
 
 A birthday-gift desk display for the recipient's **Windows PC**: it shows and controls whatever the PC is playing — Spotify desktop,
 YouTube / YouTube Music in a browser, VLC, Apple Music, … (it makes no sound itself) — big square artwork, title, artist / channel,
-progress/seek, play-pause-previous-next, a Cyberpunk-Edgerunners-style idle screen with a clock and a one-time birthday intro.
+progress/seek, play-pause-previous-next, and a Cyberpunk-Edgerunners-style idle screen with a clock.
 
 How: a small **Windows companion** ([`companion/`](companion/)) reads the PC's active *media session* and serves it over the home LAN; the
 ESP32 finds it automatically and polls it. **No Spotify account, Client ID, Premium, OAuth or tokens** — see
@@ -156,13 +156,13 @@ only in the git-ignored `firmware/secrets.local.h`; in the product they live onl
 Milestone 11). Nothing sensitive is printed to the serial log (`serial_capture.py` also masks credential-shaped strings). `.gitignore` blocks
 `.env*`, `secrets.*`, `*.local.*`, token/credential files, keys, flash dumps, build output, logs and vendor downloads — only `*.example.*`
 templates may be committed. The companion's LAN API is unauthenticated plain HTTP, fenced by LAN-only / Host-header / custom-header rules
-(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); a pairing token comes with Milestone 11. Before pushing: `git status` and `git diff --cached`.
+(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); a pairing token comes with Milestone 13. Before pushing: `git status` and `git diff --cached`.
 
 ## First-run setup / recovery / reset
 
 *(designed and documented at Milestone 11; planned flow: device opens a temporary Wi-Fi access point -> phone joins -> captive page picks the
-Wi-Fi network and stores it in NVS -> the PC companion and the display pair (shared token) -> Now Playing; holding BOOT at power-up wipes the
-stored Wi-Fi/pairing and re-enters setup.)*
+Wi-Fi network and stores it in NVS -> the display finds the PC companion by itself -> Now Playing; holding BOOT at power-up wipes the
+stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milestone 13.)*
 
 ## Milestones (plan revised 2026-10-12 for the companion architecture)
 
@@ -177,11 +177,13 @@ stored Wi-Fi/pairing and re-enters setup.)*
 | 6 | Real artwork (companion-normalised JPEG) | **done** on hardware (110-177 ms per image) |
 | 7 | Play / pause / previous / next (+ seek) through the media session | **done** for play/pause/next/previous (real taps, Spotify + Chrome); seek wired, not yet seen in a log |
 | — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | **passed by log evidence** (owner's visual confirmation of the screen still to be given) |
-| 8 | Polished UI + full-screen art | |
-| 9 | Cyberpunk idle screen | |
-| 10 | Birthday intro | |
-| 11 | First-run Wi-Fi setup + companion pairing token | |
-| 12 | Companion packaging: single `.exe`, auto-start, firewall helper | |
+| 8 | **Main player visual redesign** (big frameless cover, artwork-driven blurred background, clean foreground) | **done** - see [M8 doc](docs/milestones/M8-player-redesign.md) |
+| 9 | Cyberpunk idle screen (nothing playing) | next |
+| 10 | Full-screen album-art polish | |
+| 11 | First-run Wi-Fi setup | |
+| 12 | Companion installer (single `.exe`, auto-start, firewall helper) | |
+| 13 | Pairing / security (token between display and companion) | |
+| — | ~~Birthday intro~~ | **dropped by the owner (2026-10-12)** |
 
 ## Git workflow
 

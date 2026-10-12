@@ -31,7 +31,21 @@ TRACKS = [
 ]
 
 
+def load_tracks_from_dir(path: str) -> None:
+    import os
+    global TRACKS, ART_FILES
+    files = sorted(f for f in os.listdir(path) if f.lower().endswith((".jpg", ".jpeg", ".png")))
+    TRACKS = [(os.path.splitext(f)[0], "Test Artist", "Test Covers", 200, (0, 0, 0), (1, 1)) for f in files]
+    ART_FILES = [os.path.join(path, f) for f in files]
+
+
+ART_FILES: list = []
+
+
 def make_cover(idx: int, color, aspect) -> bytes:
+    if ART_FILES:
+        with open(ART_FILES[idx], "rb") as f:
+            return f.read()
     w = 640 * aspect[0] // max(aspect) if aspect[0] >= aspect[1] else 640
     h = int(w * aspect[1] / aspect[0])
     img = Image.new("RGB", (w, h), color)
@@ -134,6 +148,8 @@ class Fake:
 
 
 def main() -> None:
+    if len(sys.argv) > 2 and sys.argv[1] == "--art-dir":
+        load_tracks_from_dir(sys.argv[2])
     fake = Fake()
     print("fake media session is up (silent). Ctrl+C to stop.", flush=True)
     try:

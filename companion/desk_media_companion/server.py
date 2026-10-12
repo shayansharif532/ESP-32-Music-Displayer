@@ -36,7 +36,10 @@ def _client_allowed(addr: str) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
-def make_server(monitor: MediaMonitor, port: int) -> ThreadingHTTPServer:
+DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art"}
+
+
+def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "DeskMediaCompanion/" + __version__
@@ -77,7 +80,12 @@ def make_server(monitor: MediaMonitor, port: int) -> ThreadingHTTPServer:
                 return
             url = urlparse(self.path)
             if url.path == "/now-playing":
-                self._json(200, monitor.now_playing())
+                snap = monitor.now_playing()
+                if dev_tools:
+                    pending = monitor.take_debug()
+                    if pending:
+                        snap = dict(snap, debug=pending)         # one-shot, only for dev firmware builds
+                self._json(200, snap)
             elif url.path == "/artwork":
                 q = parse_qs(url.query)
                 try:
@@ -112,6 +120,11 @@ def make_server(monitor: MediaMonitor, port: int) -> ThreadingHTTPServer:
             if length:
                 self.rfile.read(min(length, 4096))
             url = urlparse(self.path)
+            dbg = re.fullmatch(r"/debug/(\w+)", url.path)
+            if dbg and dev_tools and dbg.group(1) in DEBUG_ACTIONS:
+                monitor.request_debug(dbg.group(1))
+                self._json(200, {"ok": True, "debug": dbg.group(1)})
+                return
             m = re.fullmatch(r"/control/(\w+)", url.path)
             if not m or m.group(1) not in CONTROL_ACTIONS:
                 self._json(404, {"ok": False, "error": "unknown control"})

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Now Playing screen (480x480).  All functions are thread-safe: they take the LVGL lock themselves,
+ * Now Playing screen (480x480). All functions are thread-safe: they take the LVGL lock themselves,
  * so network / app tasks may call them directly.  Do NOT call them from inside an LVGL callback.
  *
  * The command callback runs on the LVGL task: it must only post to a queue, never block or do I/O.
@@ -8,6 +8,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "lvgl.h"
+
+/* Where the cover is drawn in the normal (non full-screen) layout. The network side asks the companion for a cover of
+ * exactly UI_ART_SIZE pixels (no scaling) and bakes the soft shadow behind this rectangle into the background image. */
+#define UI_ART_SIZE     312
+#define UI_ART_X        ((480 - UI_ART_SIZE) / 2)
+#define UI_ART_Y        18
 
 typedef enum {
     UI_CMD_PREV,
@@ -40,12 +46,17 @@ void ui_set_progress(uint32_t progress_ms, bool playing);
 /* Dim the controls the current media session does not support (they stay tappable; the session just refuses). */
 void ui_set_capabilities(bool can_prev, bool can_next, bool can_seek);
 
-/* Album art: 16-bit RGB565 image descriptor, or NULL for the placeholder. The pixel buffer must stay valid
- * until another ui_set_art() call has returned. */
-void ui_set_art(const lv_image_dsc_t *dsc);
+/* Artwork: the cover and the blurred full-screen background derived from it (both 16-bit RGB565 image descriptors), or
+ * NULL/NULL for the placeholder. The pixel buffers must stay valid until another ui_set_art() call has returned. */
+void ui_set_art(const lv_image_dsc_t *art, const lv_image_dsc_t *bg);
 
 /* One small status line at the very top (empty/NULL text hides it). */
 void ui_set_status(ui_status_level_t level, const char *text);
 
 /* Monotonic count of touch presses seen by the UI (for soak-test logging). */
 uint32_t ui_touch_count(void);
+
+#ifdef APP_DEV_TOOLS
+/* Development only: act as if a control was tapped ("play", "next", "prev", "art"). */
+void ui_debug_tap(const char *which);
+#endif

@@ -23,6 +23,7 @@
 
 #include "app_config.h"
 #include "demo_player.h"
+#include "dev_tools.h"
 #include "health.h"
 #include "pc_media.h"
 #include "ui.h"
@@ -115,16 +116,23 @@ static void on_state(const pc_media_state_t *st, void *ctx)
     ui_set_capabilities(st->can_prev, st->can_next, st->can_seek);
 }
 
-static void on_art(const lv_image_dsc_t *dsc, void *ctx)
+static void on_art(const lv_image_dsc_t *art, const lv_image_dsc_t *bg, void *ctx)
 {
     (void)ctx;
-    ui_set_art(dsc);
+    ui_set_art(art, bg);
 }
+
+#ifdef APP_DEV_TOOLS
+static void on_debug(const char *what, void *ctx)
+{
+    (void)ctx;
+    dev_tools_handle(what);
+}
+#endif
 
 static void on_status(pc_media_status_t st, const char *detail, void *ctx)
 {
     (void)ctx;
-    (void)detail;
     switch (st) {
     case PC_MEDIA_WAITING_NETWORK:
         ui_set_status(UI_STATUS_INFO, "Connecting to Wi-Fi...");
@@ -138,9 +146,12 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
             idle_message("Looking for your PC", "Is Desk Media Companion running on it?");
         }
         break;
-    case PC_MEDIA_CONNECTED:
-        ui_set_status(UI_STATUS_INFO, s_source);
+    case PC_MEDIA_CONNECTED: {                         /* detail = the Windows app id of the session */
+        char src[sizeof s_source];
+        friendly_source(detail, src, sizeof src);
+        ui_set_status(UI_STATUS_INFO, src);
         break;
+    }
     case PC_MEDIA_NO_SESSION:
         ui_set_status(UI_STATUS_INFO, "");
         break;
@@ -229,7 +240,15 @@ void app_main(void)
     const pc_media_config_t pc = {
         .static_host = DEV_COMPANION_HOST,
         .port = 0,
-        .cbs = { .on_state = on_state, .on_art = on_art, .on_status = on_status, .ctx = NULL },
+        .art_size = UI_ART_SIZE,
+        .cover = { UI_ART_X, UI_ART_Y, UI_ART_SIZE },
+        .cbs = {
+            .on_state = on_state, .on_art = on_art, .on_status = on_status,
+#ifdef APP_DEV_TOOLS
+            .on_debug = on_debug,
+#endif
+            .ctx = NULL,
+        },
     };
     ESP_ERROR_CHECK(pc_media_start(&pc));
 

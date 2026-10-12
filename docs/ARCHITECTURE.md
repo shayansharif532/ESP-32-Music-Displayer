@@ -77,7 +77,7 @@ interface (VPN / virtual adapters skipped). The display uses the packet's source
 **Safety rails (MVP):** the API is unauthenticated plain HTTP, so it is fenced: only private / loopback / link-local clients are served;
 the `Host` header must be an IP literal (blocks DNS-rebinding); every `POST` must carry `X-Desk-Client` (a web page cannot add it
 cross-origin without a CORS pre-flight, which is never approved - so websites cannot press the buttons); nothing but media metadata and
-four transport actions is exposed. A pairing token (set up with the Milestone 11 flow) is the planned hardening.
+four transport actions is exposed. A pairing token (Milestone 13) is the planned hardening.
 
 ## Failure behaviour
 
@@ -99,4 +99,4 @@ four transport actions is exposed. A pairing token (set up with the Milestone 11
 ## Security / secrets
 
 No Spotify credentials exist anywhere. Wi-Fi credentials: development only, in the git-ignored `firmware/secrets.local.h` (made by
-`tools/set-dev-secrets.ps1`); the product keeps them in NVS via the first-run portal (Milestone 11). Never commit credentials, never log them.
+`tools/set-dev-secrets.ps1`); the product keeps them in NVS via the first-run Wi-Fi portal (Milestone 11). Never commit credentials, never log them.

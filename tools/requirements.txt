@@ -8,3 +8,4 @@ esptool==5.5.0
 pyserial==3.5
 # bitstring 5.x removed BitStream, which espefuse (part of esptool) imports.
 bitstring>=4.2.0,<5
+pillow>=11

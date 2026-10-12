@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from winrt.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
@@ -62,6 +62,8 @@ class MediaMonitor:
         self._seq = 0
         self._last_sig = ""
         self._last_playing_app = ""      # when everything is paused, stay on the app that was playing last
+        self._debug_lock = threading.Lock()
+        self._debug_request = ""          # dev tools: one-shot request handed to the display with the next /now-playing
 
     # ---- lifecycle ------------------------------------------------------------------------------
     def start(self) -> None:
@@ -86,6 +88,16 @@ class MediaMonitor:
             snap = {"ok": False, "error": str(exc)[:120], "has_session": False}
         self._snap, self._snap_at = snap, time.monotonic()
         return snap
+
+    # ---- dev tools (only reachable when the companion runs with --dev-tools) ---------------------
+    def request_debug(self, action: str) -> None:
+        with self._debug_lock:
+            self._debug_request = action
+
+    def take_debug(self) -> str:
+        with self._debug_lock:
+            action, self._debug_request = self._debug_request, ""
+        return action
 
     def artwork(self, size: int = ART_DEFAULT_SIZE) -> Optional[tuple[str, bytes]]:
         """(art_id, baseline JPEG bytes at size x size) for the current track, or None."""
@@ -338,8 +350,12 @@ def _render_square_jpeg(raw: bytes, size: int) -> bytes:
     if 0.88 <= ratio <= 1.14:
         img = ImageOps.fit(img, (size, size), Image.LANCZOS)
     else:
+        # Wide / tall art (e.g. a 16:9 video thumbnail): keep all of it, sharp, in the middle, and fill the rest of the square
+        # with a blurred, dimmed copy of itself instead of dead black bars - no empty borders around the cover.
         fitted = ImageOps.contain(img, (size, size), Image.LANCZOS)
-        canvas = Image.new("RGB", (size, size), ART_BG)
+        canvas = ImageOps.fit(img, (size, size), Image.BILINEAR)
+        canvas = canvas.filter(ImageFilter.GaussianBlur(max(4, size // 14)))
+        canvas = ImageEnhance.Brightness(canvas).enhance(0.6)
         canvas.paste(fitted, ((size - fitted.width) // 2, (size - fitted.height) // 2))
         img = canvas
     out = io.BytesIO()

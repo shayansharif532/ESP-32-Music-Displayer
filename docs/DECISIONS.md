@@ -23,7 +23,7 @@ The brief prefers Arduino + LVGL *if it supports everything cleanly*. Arduino **
 4. Reproducible, pinned toolchain (`dependencies.lock`), headless install via Espressif's `eim` (available on winget).
 
 Cost: bigger toolchain (several GB), slower first build. Accepted; it is automated.
-Layout follows the brief: `main`, `board` (pins/hardware config), `display`, `touch`, `ui`, `screens/{now_playing,idle,setup,birthday}`,
+Layout follows the brief: `main`, `board` (pins/hardware config), `display`, `touch`, `ui`, `screens/{now_playing,idle,setup}` (the birthday screen from the original brief was dropped on 2026-10-12),
 `wifi`, `spotify`, `storage`.
 
 Build settings carried over from Waveshare's tested example: QIO flash 16 MB, `CONFIG_SPIRAM_MODE_OCT`, 80 MHz PSRAM, 240 MHz CPU,

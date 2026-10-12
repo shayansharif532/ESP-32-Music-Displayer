@@ -44,6 +44,7 @@ static struct {
     bool host_static;
     unsigned failures;
     pc_media_state_t st;
+    uint16_t art_size;
     char art_shown[16];
     int art_failures;
     pc_media_status_t status;
@@ -209,7 +210,7 @@ static void update_art(void)
         s.art_shown[0] = '\0';
         s.art_failures = 0;
         if (s.cbs.on_art) {
-            s.cbs.on_art(NULL, s.cbs.ctx);
+            s.cbs.on_art(NULL, NULL, s.cbs.ctx);
         }
         return;
     }
@@ -219,10 +220,12 @@ static void update_art(void)
         return;
     }
     int64_t t0 = esp_timer_get_time();
-    const lv_image_dsc_t *dsc = NULL;
-    esp_err_t err = pc_http_request(host, port, "/artwork?size=300", false, 6000, &s.art);
+    const lv_image_dsc_t *dsc = NULL, *bg = NULL;
+    char path[40];
+    snprintf(path, sizeof path, "/artwork?size=%u", (unsigned)s.art_size);
+    esp_err_t err = pc_http_request(host, port, path, false, 6000, &s.art);
     if (err == ESP_OK && s.art.status == 200 && s.art.body.len > 100 && !s.art.body.truncated) {
-        err = pc_art_decode((const uint8_t *)s.art.body.data, s.art.body.len, &dsc);
+        err = pc_art_decode((const uint8_t *)s.art.body.data, s.art.body.len, &dsc, &bg);
     } else {
         err = ESP_FAIL;
     }
@@ -232,14 +235,14 @@ static void update_art(void)
         strlcpy(s.art_shown, want, sizeof s.art_shown);
         s.art_failures = 0;
         if (s.cbs.on_art) {
-            s.cbs.on_art(dsc, s.cbs.ctx);
+            s.cbs.on_art(dsc, bg, s.cbs.ctx);
         }
     } else if (++s.art_failures >= ART_RETRIES) {
         ESP_LOGW(TAG, "artwork failed %d times (HTTP %d), giving up on this image", s.art_failures, s.art.status);
         strlcpy(s.art_shown, want, sizeof s.art_shown);
         s.art_failures = 0;
         if (s.cbs.on_art) {
-            s.cbs.on_art(NULL, s.cbs.ctx);
+            s.cbs.on_art(NULL, NULL, s.cbs.ctx);
         }
     }
 }
@@ -284,6 +287,8 @@ static bool poll_once(void)
     ns.can_next = jbool(root, "can_next");
     ns.can_prev = jbool(root, "can_prev");
     ns.can_seek = jbool(root, "can_seek");
+    char dbg[24];
+    jstr(root, "debug", dbg, sizeof dbg);
     cJSON_Delete(root);
 
     if (ns.has_session && strcmp(ns.track_id, s.st.track_id) != 0) {
@@ -297,6 +302,9 @@ static bool poll_once(void)
         s.cbs.on_state(&s.st, s.cbs.ctx);
     }
     update_art();
+    if (dbg[0] && s.cbs.on_debug) {
+        s.cbs.on_debug(dbg, s.cbs.ctx);
+    }
     return true;
 }
 
@@ -394,6 +402,10 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     pc_resp_init(&s.resp, 16 * 1024);
     pc_resp_init(&s.art, ART_MAX_BYTES);
     s.port = cfg->port ? cfg->port : PC_MEDIA_DEFAULT_PORT;
+    s.art_size = cfg->art_size ? cfg->art_size : 300;
+    if (cfg->cover.size) {
+        pc_art_set_cover_rect(cfg->cover.x, cfg->cover.y, cfg->cover.size, cfg->cover.size);
+    }
     if (cfg->static_host && cfg->static_host[0]) {
         strlcpy(s.host, cfg->static_host, sizeof s.host);
         s.host_valid = true;

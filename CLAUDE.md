@@ -6,9 +6,17 @@
 
 Build a polished, standalone "Now Playing" touchscreen desk display (for the recipient's Windows PC) as a birthday gift.
 
-The device should feel like a finished consumer product, not a development board. It shows what the recipient's **Windows PC** is currently playing - title, artist / channel, artwork, playback progress - and gives touch controls (play/pause, previous, next, seek). It will also include a Cyberpunk / Night City-inspired idle screen and a one-time birthday intro.
+The device should feel like a finished consumer product, not a development board. It shows what the recipient's **Windows PC** is currently playing - title, artist / channel, artwork, playback progress - and gives touch controls (play/pause, previous, next, seek). It will also include a Cyberpunk / Night City-inspired idle screen.
 
 The device does **not** output audio. It is a status display and remote controller for the **active Windows media session**, whatever app produces it (Spotify desktop, YouTube / YouTube Music in a browser, VLC, Apple Music, ...).
+
+---
+
+## ROADMAP CHANGE (owner decision, 2026-10-12, later that day) - read this too
+
+The **birthday intro is dropped** - do not work on it. Current priority order after the MVP:
+
+A. Main player visual redesign (done, Milestone 8) -> B. Cyberpunk idle screen (M9) -> C. Full-screen album-art polish (M10) -> D. First-run Wi-Fi setup (M11) -> E. Companion installer (M12) -> F. Pairing / security (M13).
 
 ---
 
@@ -204,22 +212,24 @@ Previous / play-pause / next / seek via `POST /control/...`, applied by the comp
 
 Works with **Spotify desktop** and **YouTube in a supported browser**: real artwork, title + artist/channel, working progress bar, play/pause, next/previous where the media session supports them.
 
-### Milestone 8 — Polished Main UI
+### Milestone 8 - Main player visual redesign (DONE 2026-10-12; evidence: `docs/milestones/M8-player-redesign.md`)
 
-Product-quality now-playing layout.
+The owner found the MVP screen too prototype-like and asked for: a much bigger cover as the focal point, no card/border around it, the **whole
+screen background derived from the cover** (blurred, darkened), no empty side borders, a clean readable foreground, and a finished-product look.
 
-Design goals:
+Built (`firmware/components/ui/ui.c`, `firmware/components/pc_media/pc_art.c`):
 
-- minimal
-- dark
-- visually premium
-- large album art
-- highly readable song/artist text
-- touch targets large enough for casual desk use
-- subtle animation only where it improves the experience
-- no clutter
+- cover 312x312 (was 260) with no frame - the box only rounds the corners; wide/tall art (16:9 video thumbnails) is kept whole and the rest of the square
+  is filled with a blurred copy of itself (done in the companion), so there are no dead bars;
+- background = one pre-baked RGB565 image per track: cover -> 40x40 colour grid -> saturate -> smooth -> smooth-step upscale to 480x480 -> darkened with a vertical
+  gradient (extra dark for bright covers) -> soft shadow behind the cover -> ordered-dithered (no banding). LVGL only blits it (no overlays, no runtime blur);
+- the cover is decoded to RGB888 and dithered down to RGB565 (smooth gradients in the art do not band);
+- title (26 pt) and artist (20 pt) centred below, thin progress line as wide as the cover with the times at its ends (knob appears only while dragging),
+  big white play/pause button, plain prev/next icons, dimmed when the session does not support them;
+- the no-artwork look is a dithered dark gradient with a translucent placeholder square.
 
-Include full-screen album-art mode.
+Rules for later work on this screen: keep the foreground clean; do not add LVGL shadows/blur/overlays over the full screen (they redraw every progress tick);
+verify visually with `tools/screenshot.py` (see Testing Philosophy) instead of guessing.
 
 ### Milestone 9 — Cyberpunk Idle Screen
 
@@ -237,33 +247,15 @@ Do not turn the interface into a cluttered anime collage.
 
 Avoid embedding copyrighted art unless the user explicitly provides an asset they have the right to use. Original cyberpunk-inspired UI is preferred.
 
-### Milestone 10 — Birthday Intro
+### Milestone 10 - Full-screen album-art polish
 
-One-time first-normal-boot intro.
+The tap-the-cover full-screen mode works (cover grows to 456x456, chrome hides, tap again to return) but the cover is the 312 px image stretched, so it is soft.
+Polish: request a larger cover from the companion for this mode (e.g. `/artwork?size=480`, needs a bigger decode buffer / scaling), smooth the transition, keep the blurred
+background, make the tap target and a hint obvious, handle wide art, and keep the screen free of clutter.
 
-Concept:
+*(The one-time birthday intro that used to be Milestone 10 was dropped by the owner on 2026-10-12 and is no longer part of the plan.)*
 
-```
-INITIALIZING...
-
-[brief futuristic boot animation]
-
-I REALLY WANT TO STAY AT YOUR HOUSE
-
-HAPPY BIRTHDAY
-<RECIPIENT_NAME>
-
-WELCOME TO NIGHT CITY
-```
-
-Requirements:
-
-- recipient name stored as an easy configuration value
-- one-time flag stored in NVS
-- easy developer method to replay/reset the intro
-- do not embed/download the copyrighted song itself
-
-### Milestone 11 — First-Run Setup
+### Milestone 11 - First-Run Wi-Fi Setup
 
 Final user onboarding should not require a PC.
 
@@ -275,16 +267,18 @@ Preferred flow:
 4. Local/captive setup page opens.
 5. User selects Wi-Fi and enters password.
 6. Device stores Wi-Fi credentials securely in NVS.
-7. Display and PC companion pair (shared token) so the LAN API is not open to every device.
-8. (reserved)
-9. Device returns to normal Now Playing mode.
-10. Future boots reconnect automatically.
+7. Device finds the PC companion (already automatic) and returns to normal Now Playing mode.
+8. Future boots reconnect automatically.
 
-Provide an easy reset/reconfiguration path. The companion and the display should also **pair** (shared token) so the LAN API is no longer open to every device on the network.
+Provide an easy reset/reconfiguration path (e.g. hold BOOT at power-up to wipe the stored Wi-Fi).
 
-### Milestone 12 - Companion packaging (new)
+### Milestone 12 - Companion installer
 
-Single `.exe` (PyInstaller) for the recipient, auto-start with Windows (`--install-startup`, per-user Run key), a one-time Windows Firewall helper (the first run asks to allow the port; a script that adds a rule needs the owner's UAC click - Claude must not change system/firewall settings itself), tray/quit option, update story.
+Single `.exe` (PyInstaller, `companion/build.ps1` already builds it) for the recipient, auto-start with Windows (`--install-startup`, per-user Run key), a one-time Windows Firewall helper (the first run asks to allow the port; a script that adds a rule needs the owner's UAC click - Claude must not change system/firewall settings itself), tray/quit option, update story.
+
+### Milestone 13 - Pairing / security
+
+Display and companion pair once (shared token, shown on the display and typed/confirmed on the PC, or scanned) so the unauthenticated LAN API is closed to every other device; token stored in NVS on the board and in the companion's per-user config; requests carry it; wrong/missing token -> 401. Revisit the beacon (do not advertise to unpaired displays more than needed).
 
 ---
 
@@ -372,13 +366,13 @@ companion/                      Windows companion (Python)
 firmware/
   main/                         main.c (glue), app_config.h, health.c, demo_player.c (UI-only demo)
   components/
-    ui/                         LVGL Now Playing screen (later: screens/{idle,setup,birthday})
+    ui/                         LVGL Now Playing screen (later: screens/{idle,setup})
     wifi_mgr/                   Wi-Fi STA + reconnect + SNTP
     pc_media/                   companion discovery + polling + artwork + commands
 legacy/                         obsolete Spotify client (not built)
 ```
 
-Planned additions: `screens/idle`, `screens/birthday`, `screens/setup`, `storage/` (NVS settings).
+Planned additions: `screens/idle`, `screens/setup`, `storage/` (NVS settings). Dev-only: `main/dev_tools.c` (screenshot dump + simulated taps, compiled only with `-DAPP_DEV_TOOLS=1`).
 
 Avoid a single giant application file.
 
@@ -435,7 +429,7 @@ Rules:
 Never commit:
 
 - Wi-Fi passwords
-- any pairing token for the companion API (Milestone 11)
+- any pairing token for the companion API (Milestone 13)
 - Spotify tokens / client secrets (obsolete, but the rule stands if the legacy code is ever revived)
 - API credentials
 - private keys
@@ -546,6 +540,8 @@ Physical intervention may be required for BOOT/PWR operations. Tell the user exa
 
 ## Testing Philosophy
 
+**Seeing the real screen:** build with `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 build`, run the companion with `--dev-tools`, then `tools\venv\Scripts\python.exe tools\screenshot.py --out logs\shot.png` - the board renders its LVGL screen to RAM and sends it over USB serial; the script turns it into a PNG (CRC-checked) that can be viewed. Use this to check layout, colours and artwork instead of guessing. `--tap art` presses the cover (UI only). `--tap play|next|prev` is refused unless the active session is the silent fake test session (`companion/tools/fake_media_session.py`), because it would press the real controls of whatever the owner is playing. Never ship a build with `APP_DEV_TOOLS`.
+
 For every milestone:
 
 1. build
@@ -623,12 +619,15 @@ They may be future enhancements, but they must not delay the core music-display 
 
 ## Immediate Next Task
 
-State on 2026-10-12: the MVP works and is merged into `main` (see `docs/milestones/MVP-media-companion.md`). Next, in this order:
+State on 2026-10-12: the MVP works and the Milestone 8 player redesign is done (see `docs/milestones/MVP-media-companion.md`, `docs/milestones/M8-player-redesign.md`). Next, in this order:
 
-1. Get the owner's visual feedback on the screen (layout, colours, long titles, letterboxed art) and fix what they point out.
-2. M8 polish: full-screen art, fallback font for non-Latin titles (many YouTube titles), nicer idle/no-session state.
-3. M9 Cyberpunk idle screen, M10 birthday intro (needs the recipient's name), M11 first-run Wi-Fi setup + companion pairing token, M12 companion installer/auto-start/firewall helper.
-4. A targeted touch stress soak (top band, edges, rapid taps) before the product is finalised.
+1. Collect the owner's feedback on the new player screen and fix what they point out (spacing, sizes, the fallback font for non-Latin titles - many YouTube titles have them).
+2. B. M9 Cyberpunk idle screen (shown when nothing is playing; clock; `NO ACTIVE PLAYBACK`).
+3. C. M10 full-screen album-art polish.
+4. D. M11 first-run Wi-Fi setup, E. M12 companion installer / auto-start / firewall helper, F. M13 pairing + security.
+5. A targeted touch stress soak (top band, edges, rapid taps) before the product is finalised.
+
+The birthday intro is dropped - do not work on it.
 
 Before starting: `git status`, `git log --oneline -10`, read `docs/ARCHITECTURE.md` and the latest milestone doc.
 

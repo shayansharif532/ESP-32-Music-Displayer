@@ -46,8 +46,11 @@ typedef enum {
 
 typedef struct {
     void (*on_state)(const pc_media_state_t *st, void *ctx);
-    /* New artwork (RGB565 descriptor, valid until the next on_art call returns), or NULL when there is none. */
-    void (*on_art)(const lv_image_dsc_t *dsc, void *ctx);
+    /* New artwork: the cover and the blurred full-screen background built from it (RGB565 descriptors, valid until the
+     * next on_art call returns), or both NULL when there is none. */
+    void (*on_art)(const lv_image_dsc_t *art, const lv_image_dsc_t *bg, void *ctx);
+    /* Development only: a one-shot request from the companion's /debug route ("screenshot", "tap_next", ...). */
+    void (*on_debug)(const char *what, void *ctx);
     void (*on_status)(pc_media_status_t status, const char *detail, void *ctx);
     void *ctx;
 } pc_media_callbacks_t;
@@ -55,6 +58,8 @@ typedef struct {
 typedef struct {
     const char *static_host;    /* "192.168.1.143" to skip discovery, or NULL / "" for automatic */
     uint16_t    port;           /* 0 = PC_MEDIA_DEFAULT_PORT */
+    uint16_t    art_size;       /* pixel size of the cover as drawn (square); the companion renders exactly this size */
+    struct { int x, y, size; } cover;   /* where the UI draws the cover - used for the shadow baked into the background */
     pc_media_callbacks_t cbs;
 } pc_media_config_t;
 
