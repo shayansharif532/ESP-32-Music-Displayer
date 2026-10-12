@@ -1,6 +1,13 @@
-# This file was generated using idf.py save-defconfig. It can be edited manually.
-# Espressif IoT Development Framework (ESP-IDF) 5.4.0 Project Minimal Configuration
+# sdkconfig.defaults for the Spotify desk display (Waveshare ESP32-S3-Touch-LCD-4B, SKU 32052).
 #
+# Section A is the hardware baseline taken from Waveshare's official 02_lvgl_demo_v9 example (flash/PSRAM/CPU
+# settings that are verified on this board - do not change them casually).
+# Section B is ours: smaller/safer LVGL configuration, no demos or overlays, fonts and networking.
+# History: the byte-identical official file is in git at commit d64ad06.
+#
+# After editing this file run `tools\idf.ps1 set-target esp32s3` (or delete firmware\sdkconfig) so it is re-applied.
+
+# ---- A. hardware baseline (official) ----------------------------------------------------------------
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
@@ -11,46 +18,59 @@ CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
-
 CONFIG_FREERTOS_HZ=1000
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# Console on the board's native USB (USB-Serial/JTAG) port: that is the cable that is plugged in.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---- B. LVGL ----------------------------------------------------------------------------------------
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
 CONFIG_LV_DEF_REFR_PERIOD=15
 CONFIG_LV_OS_FREERTOS=y
-CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+# One software-render thread. Waveshare's 2 draw units were present in the M1 touch crashes; a soak test must
+# prove 2 safe before anyone raises this (docs/milestones/M1-lcd-touch.md).
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=1
 # GCC 15 rejects conflicting section attributes when LVGL fast memory uses IRAM.
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=n
+CONFIG_LV_TXT_BREAK_CHARS=" ,.;:-_"
+# No on-screen diagnostics, no demos, no examples.
+CONFIG_LV_USE_SYSMON=n
+CONFIG_LV_USE_PERF_MONITOR=n
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_USE_DEMO_WIDGETS=n
+CONFIG_LV_USE_DEMO_BENCHMARK=n
+CONFIG_LV_USE_DEMO_RENDER=n
+CONFIG_LV_USE_DEMO_SCROLL=n
+CONFIG_LV_USE_DEMO_STRESS=n
+CONFIG_LV_USE_DEMO_TRANSFORM=n
+CONFIG_LV_USE_DEMO_MUSIC=n
+CONFIG_LV_USE_DEMO_FLEX_LAYOUT=n
+CONFIG_LV_USE_DEMO_MULTILANG=n
+# Fonts used by the UI (Montserrat includes the LV_SYMBOL_* glyphs).
 CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
-CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_22=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_26=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_FONT_COMPRESSED=y
-CONFIG_LV_TXT_BREAK_CHARS=" ,.;:-_"
-CONFIG_LV_USE_SYSMON=y
-CONFIG_LV_USE_PERF_MONITOR=y
 CONFIG_LV_USE_IMGFONT=y
-CONFIG_LV_USE_DEMO_WIDGETS=y
-CONFIG_LV_USE_DEMO_BENCHMARK=y
-CONFIG_LV_USE_DEMO_RENDER=y
-CONFIG_LV_USE_DEMO_SCROLL=y
-CONFIG_LV_USE_DEMO_STRESS=y
-CONFIG_LV_USE_DEMO_TRANSFORM=y
-CONFIG_LV_USE_DEMO_MUSIC=y
-CONFIG_LV_DEMO_MUSIC_AUTO_PLAY=y
-CONFIG_LV_USE_DEMO_FLEX_LAYOUT=y
-CONFIG_LV_USE_DEMO_MULTILANG=y
-CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 
-# =============================================================================
-# spotify-desk-display deltas to Waveshare's official defaults.
-# Everything above this banner is byte-identical to
-# examples/esp-idf/02_lvgl_demo_v9/sdkconfig.defaults in waveshareteam/ESP32-S3-Touch-LCD-4B.
-# =============================================================================
-# Console on the board's native USB (USB-Serial/JTAG) port: that is the cable that is plugged in.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Waveshare BSP: LVGL partial-render buffer height (rows). 50 rows = 48 KB of internal RAM (BSP default is 100).
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=50
+
+# ---- C. runtime -------------------------------------------------------------------------------------
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ---- D. networking / TLS ----------------------------------------------------------------------------
+# TLS record buffers: keep the (large) receive buffer, shrink the send buffer to save internal RAM.
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
