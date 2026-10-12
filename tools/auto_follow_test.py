@@ -36,6 +36,14 @@ def http(method, path):
         return {"http_error": exc.code, **json.loads(exc.read().decode("utf-8") or "{}")}
 
 
+def hop(frm, direction="source-next"):
+    """One step along the ring of SESSIONS: the synthetic idle-screen item at the end of the ring (ADR-008) is stepped over."""
+    r = http("POST", f"/control/{direction}?from={frm}")
+    if r.get("app") == "idle":
+        r = http("POST", f"/control/{direction}?from=idle")
+    return r
+
+
 def now():
     return http("GET", "/now-playing")
 
@@ -45,7 +53,7 @@ def sources():
 
 
 def states():
-    return {s["app"]: s["state"] for s in sources().get("sources", [])}
+    return {s["app"]: s["state"] for s in sources().get("sources", []) if not s.get("synthetic")}       # sessions only: the idle item is not one
 
 
 def check(name, ok, detail=""):
@@ -87,7 +95,7 @@ def swipe_to(app, direction="source-next"):
     for _ in range(4):
         if now().get("app") == app:
             return True
-        http("POST", f"/control/{direction}?from={now().get('app', '')}")
+        hop(now().get('app', ''), direction)
     return now().get("app") == app
 
 
@@ -127,7 +135,7 @@ def main() -> int:
         set_state(A, True)
         set_state(B, False)
         check("start: A shows", shows(A))
-        r = http("POST", f"/control/source-next?from={A}")
+        r = hop(A)
         check("a vertical swipe selects B", r.get("ok") and r.get("app") == B and r.get("mode") == "manual" and now()["app"] == B and now()["mode"] == "manual", json.dumps({k: r.get(k) for k in ("app", "mode")}))
         check("B is paused and says so (play icon state)", now()["state"] == "paused" and now()["playing"] is False)
         time.sleep(3.0)
@@ -142,7 +150,7 @@ def main() -> int:
         set_state(A, True)
 
         print("\n== case A2: Spotify just keeps playing - the manual selection times out")
-        http("POST", f"/control/source-next?from={A}")
+        hop(A)
         check("manual on B", now()["app"] == B and now()["mode"] == "manual")
         t0 = time.time()
         time.sleep(15.0)
@@ -152,7 +160,7 @@ def main() -> int:
         check("returns to A (AUTO) after the 20 s idle time", returned and 19.0 <= dt <= 24.0, f"{dt:.1f} s")
 
         print("\n== case A3: touching the selected session restarts the idle timer")
-        http("POST", f"/control/source-next?from={A}")
+        hop(A)
         time.sleep(14.0)
         ctl("seek", B, "&position_ms=5000")                                                # the user seeks the paused video
         time.sleep(14.0)
@@ -164,7 +172,7 @@ def main() -> int:
         set_state(A, False)
         set_state(B, True)
         check("start: B shows", shows(B))
-        http("POST", f"/control/source-next?from={B}")
+        hop(B)
         check("a swipe selects A (paused)", now()["app"] == A and now()["mode"] == "manual" and now()["state"] == "paused", f"{now().get('app')} {now().get('state')}")
         ctl("pause", B)
         wait_for(lambda: states().get(B) == "paused", 4.0)
@@ -177,7 +185,7 @@ def main() -> int:
         set_state(B, False)
         set_state(A, True)
         check("start: A shows (playing), B paused", shows(A) and states()[B] == "paused")
-        http("POST", f"/control/source-next?from={A}")
+        hop(A)
         check("manual on B", now()["app"] == B)
         r = ctl("playpause", B)
         check("play pressed on the board resumes THAT session", r.get("ok") and r.get("app") == B)
@@ -195,13 +203,14 @@ def main() -> int:
         set_state(B, False)
         set_state(A, True)
         shows(A)
-        http("POST", f"/control/source-next?from={A}")
+        hop(A)
         check("manual on B", now()["app"] == B and now()["mode"] == "manual")
         fakes.stop_fake(procs.pop(B))
         check("B closes: the display falls back to automatic (A) at once", shows(A, 4.0) and now()["mode"] == "auto" and sources()["mode"] == "auto", f"{now().get('app')} {sources().get('mode')}")
         check("... and B is no longer offered", B not in states())
         r = http("POST", f"/control/source-next?from={A}")
-        check("with a single source a swipe does nothing", r.get("ok") and r.get("changed") is False, json.dumps(r)[:80])
+        check("with a single session the ring is [session, Idle Screen]: a swipe goes to the idle item (ADR-008)", r.get("ok") and r.get("changed") is True and r.get("app") == "idle" and r.get("count") == 2, json.dumps(r)[:80])
+        http("POST", "/control/source-auto")
         r = ctl("playpause", B)
         check("a command aimed at the closed session is refused, not redirected", r.get("ok") is False, json.dumps(r)[:90])
 
@@ -211,12 +220,12 @@ def main() -> int:
         time.sleep(1.0)
         set_state(A, False)
         set_state(B, False)
-        order = [s["app"] for s in sources()["sources"]]
+        order = [s["app"] for s in sources()["sources"] if not s.get("synthetic")]       # (hop() steps over the idle item)
         here = now()["app"]
         seen = []
         ok = True
         for i in range(4):
-            r = http("POST", f"/control/source-next?from={here}")
+            r = hop(here)
             expect = order[(order.index(here) + 1) % len(order)]
             ok &= r.get("app") == expect and now()["app"] == expect
             here = expect

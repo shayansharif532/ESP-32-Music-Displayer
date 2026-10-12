@@ -26,6 +26,14 @@ def http(method, path):
         return {"http_error": exc.code}
 
 
+def hop(frm, direction="source-next"):
+    """One step along the ring of SESSIONS: the synthetic idle-screen item at the end of the ring (ADR-008) is stepped over."""
+    r = http("POST", f"/control/{direction}?from={frm}")
+    if r.get("app") == "idle":
+        r = http("POST", f"/control/{direction}?from=idle")
+    return r
+
+
 def now():
     return http("GET", "/now-playing")
 
@@ -96,7 +104,7 @@ def main() -> int:
         check("Chrome is not Spotify: no shuffle / repeat", now().get("spotify") is False and not now().get("can_shuffle"))
 
         print("\n== case B: YouTube playing, browse to Spotify, YouTube resumes")
-        r = http("POST", f"/control/source-next?from={CH}")
+        r = hop(CH)
         check("a swipe selects Spotify (paused)", r.get("app") == SP and now()["state"] == "paused" and now()["mode"] == "manual", f"{now().get('app')} {now().get('mode')}")
         time.sleep(2.0)
         check("manual browsing holds while YouTube plays", now()["app"] == SP)
@@ -112,7 +120,7 @@ def main() -> int:
         set_state(CH, False)
         set_state(SP, True)
         check("start: Spotify shows", shows(SP))
-        http("POST", f"/control/source-next?from={SP}")
+        hop(SP)
         check("a swipe selects Chrome (paused)", now()["app"] == CH and now()["mode"] == "manual" and now()["state"] == "paused")
         http("POST", f"/control/pause?app={SP}")
         wait_for(lambda: states().get(SP) == "paused", 5.0)
@@ -123,7 +131,7 @@ def main() -> int:
         check("Spotify STARTS: back to auto, the display returns to Spotify", shows(SP, 5.0) and now()["mode"] == "auto", f"{now().get('app')} {now().get('mode')}")
 
         print("\n== case C: select paused YouTube, press play on it")
-        http("POST", f"/control/source-next?from={SP}")
+        hop(SP)
         check("manual on Chrome", now()["app"] == CH and now()["mode"] == "manual")
         r = http("POST", f"/control/playpause?app={CH}")
         mute_all()
@@ -142,7 +150,7 @@ def main() -> int:
         seen = []
         ok = True
         for _ in range(4):
-            r = http("POST", f"/control/source-next?from={here}")
+            r = hop(here)
             ok &= r.get("changed") is True and r.get("app") != here
             here = r.get("app")
             seen.append(here)

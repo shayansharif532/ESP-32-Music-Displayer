@@ -96,7 +96,17 @@ def sources() -> dict:
 
 
 def states() -> dict[str, str]:
-    return {s["app"]: s["state"] for s in sources().get("sources", [])}
+    return {s["app"]: s["state"] for s in sources().get("sources", []) if not s.get("synthetic")}       # sessions only: the idle item is not one
+
+
+def session_apps() -> list[str]:
+    return [s["app"] for s in sources().get("sources", []) if not s.get("synthetic")]
+
+
+def shown() -> str:
+    """What the display shows: "idle" when the idle screen was selected as a source (ADR-008), else the session's app id."""
+    n = now()
+    return "idle" if n.get("idle_selected") else n.get("app", "")
 
 
 def start_fake(paused: bool = False) -> None:
@@ -125,11 +135,11 @@ def stop_fake() -> None:
 
 def select(app: str, direction: str = "swipe_up") -> bool:
     """Swipe vertically until `app` is displayed (selection only)."""
-    for _ in range(6):
-        if now().get("app", "").lower() == app.lower():
+    for _ in range(8):                                        # (the ring also holds the idle item: up to one extra step)
+        if shown().lower() == app.lower():
             return True
         act(direction)
-    return now().get("app", "").lower() == app.lower()
+    return shown().lower() == app.lower()
 
 
 def ctl(action: str, app: str):
@@ -203,23 +213,24 @@ def main() -> int:
         # ---- 4. vertical swipes walk the ring, wrap around, and never touch playback ----------------------------------------------
         st0 = states()
         seen = []
-        order = [s["app"] for s in sources()["sources"]]
+        order = [s["app"] for s in sources()["sources"]]          # sessions alphabetical + the synthetic "idle" item last
+        check("the ring ends with the idle screen item", order[-1] == "idle", " -> ".join(order))
         here = order.index("python.exe")
         ok_all = True
         for i in range(len(order) + 1):
             expect = order[(here + i + 1) % len(order)]
             log = act("swipe_up")
-            got = now()["app"]
+            got = shown()
             seen.append(got)
             ok_all &= got == expect and "control " not in log
         check("swipe UP walks the ring forwards and wraps around (and sends no media command)", ok_all, " -> ".join(seen))
         seen = []
         ok_all = True
-        here = order.index(now()["app"])
+        here = order.index(shown())
         for i in range(len(order) + 1):
             expect = order[(here - i - 1) % len(order)]
             log = act("swipe_down")
-            got = now()["app"]
+            got = shown()
             seen.append(got)
             ok_all &= got == expect and "control " not in log
         check("swipe DOWN walks it backwards and wraps around", ok_all, " -> ".join(seen))
@@ -234,7 +245,7 @@ def main() -> int:
         others_playing = [a for a, st in states().items() if a != "python.exe" and st == "playing"]
         if others_playing:                                   # auto-follow: the fake stopped playing, another session still does
             check("the fake paused while another app plays: auto-follow moves to the playing one", wait_for(lambda: now().get("app") in others_playing, 4.0), now().get("app", ""))
-        order = [s["app"] for s in sources()["sources"]]
+        order = session_apps()
         other = [a for a in order if a != "python.exe"][0]
         check("the paused fake is still offered: swipe to it", select("python.exe", "swipe_up"))
         n = now()
@@ -271,12 +282,13 @@ def main() -> int:
         s = sources()
         check("selected session gone: back to automatic on another session", n.get("app") != "python.exe" and n.get("has_session") and s["mode"] == "auto" and n.get("mode") == "auto", f"{n.get('app')} mode={s['mode']}")
         check("... and the swipe list no longer offers it", all(x["app"] != "python.exe" for x in s["sources"]))
-        if len(s["sources"]) >= 2:
+        if len(s["sources"]) >= 2:                                    # (the idle item counts: one session + Idle Screen = two sources)
             log = act("swipe_up")
-            check("with the remaining sources vertical swipes still work", "source ->" in log)
+            check("with the remaining sources (and the idle item) vertical swipes still work", "source ->" in log)
+            select(session_apps()[0], "swipe_up") if session_apps() else None        # back off the idle item, if the swipe landed on it
         else:
             log = act("swipe_up")
-            check("a single source: vertical swipes do nothing", "source ->" not in log and "control " not in log)
+            check("only the idle item left: vertical swipes do nothing", "source ->" not in log and "control " not in log)
 
         # ---- 8. volume follows the displayed source ----------------------------------------------------------------------------
         start_fake()

@@ -35,6 +35,9 @@ static const char *TAG = "app";
 
 #define VOLUME_STEP_PERCENT     5
 
+static bool s_idle_visible;          /* the idle screen is (becoming) the visible one (defined with the screen logic below) */
+static void peek_arm(void);
+
 /* ---- UI taps -> companion commands (runs on the LVGL task: only queues, never blocks) ----------------- */
 
 static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
@@ -47,8 +50,11 @@ static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
     case UI_CMD_SEEK:       pc_media_command(PC_MEDIA_CMD_SEEK, arg); break;
     case UI_CMD_SHUFFLE:    pc_media_command(PC_MEDIA_CMD_SHUFFLE, 0); break;
     case UI_CMD_REPEAT:     pc_media_command(PC_MEDIA_CMD_REPEAT, 0); break;
-    case UI_CMD_SOURCE_NEXT: pc_media_command(PC_MEDIA_CMD_SOURCE_NEXT, 0); break;
-    case UI_CMD_SOURCE_PREV: pc_media_command(PC_MEDIA_CMD_SOURCE_PREV, 0); break;
+    case UI_CMD_SOURCE_NEXT:
+    case UI_CMD_SOURCE_PREV:                                 /* arg 1 = "the display shows the idle screen" (it is an item of the ring) */
+        peek_arm();                                          /* swiping from the idle screen onto a paused session must not bounce back to idle */
+        pc_media_command(cmd == UI_CMD_SOURCE_NEXT ? PC_MEDIA_CMD_SOURCE_NEXT : PC_MEDIA_CMD_SOURCE_PREV, s_idle_visible ? 1 : 0);
+        break;
     }
 }
 
@@ -56,6 +62,9 @@ static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
 
 void app_side_key(side_key_t key)
 {
+    if (s_idle_visible) {
+        return;              /* the idle screen shows no app: a volume key must not change an unrelated app's volume (ADR-008) */
+    }
     pc_media_command(key == SIDE_KEY_UP ? PC_MEDIA_CMD_VOLUME_UP : PC_MEDIA_CMD_VOLUME_DOWN, VOLUME_STEP_PERCENT);
 }
 
@@ -74,7 +83,7 @@ static void on_volume(int percent, bool muted, void *ctx)
 static void on_source(const char *name, int index, int count, void *ctx)
 {
     (void)ctx;
-    ui_show_source(name, index, count);
+    ui_show_source_on(s_idle_visible ? idle_screen_obj() : NULL, name, index, count);   /* over the idle screen when that is the new source */
 }
 
 /* ---- companion events -> UI (called from the pc_media poll task) ----------------------------------------- */
@@ -96,8 +105,9 @@ static char s_source[32];            /* friendly name of the app that is playing
 #define PEEK_HOLD_MS        30000
 
 static lv_obj_t *s_player_scr;
-static bool s_idle_visible;          /* the idle screen is (becoming) the visible one */
 static bool s_have_session;          /* the PC has a (maybe paused) media session */
+static bool s_idle_selected;         /* the user swiped onto the idle screen (the companion's MANUAL_TEMP selection "idle") */
+static volatile uint32_t s_leave_idle_until;   /* (uint32 ms) after a tap that left the idle selection: ignore the (stale) selection report until then */
 static int64_t s_last_playing_ms;    /* when something last played; 0 = not since connecting */
 static volatile uint32_t s_peek_until;   /* (uint32 ms) the player stays up until then even though nothing plays; 0 = no peek */
 static uint32_t s_last_touch;
@@ -129,6 +139,19 @@ static void peek_arm(void)
 static void on_idle_tap(void *ctx)
 {
     (void)ctx;
+    if (ui_touch_moved()) {
+        return;                                            /* a sloppy swipe, not a tap */
+    }
+    if (s_idle_selected) {                                 /* the idle screen was chosen as a source: a tap leaves that choice (back to automatic) */
+        s_idle_selected = false;
+        s_leave_idle_until = (uint32_t)now_ms() + 1500;
+        peek_arm();
+        pc_media_command(PC_MEDIA_CMD_SOURCE_AUTO, 0);
+        if (s_have_session) {
+            show_screen(false);
+        }
+        return;
+    }
     if (s_have_session) {
         peek_arm();
         show_screen(false);
@@ -144,6 +167,11 @@ static bool idle_wanted(const pc_media_state_t *st)
     s_last_touch = touches;
     if (st->any_playing) {
         s_last_playing_ms = now;
+    }
+    if (st->idle_selected && (int32_t)(s_leave_idle_until - (uint32_t)now) <= 0) {
+        return true;                                       /* chosen in the source ring: shown whatever plays, no delay */
+    }
+    if (st->any_playing) {
         s_peek_until = 0;
         return false;
     }
@@ -232,6 +260,7 @@ static void on_state(const pc_media_state_t *st, void *ctx)
     (void)ctx;
     idle_screen_set_clock(st->clock_ms);
     s_have_session = st->has_session;
+    s_idle_selected = st->idle_selected && (int32_t)(s_leave_idle_until - (uint32_t)now_ms()) <= 0;
     const bool want_idle = idle_wanted(st);
     if (!st->has_session) {
         if (want_idle) {
@@ -239,7 +268,8 @@ static void on_state(const pc_media_state_t *st, void *ctx)
                 idle_message("Nothing playing", "Play something on your PC");
                 s_source[0] = '\0';
             }
-            idle_screen_set_status("Nothing playing");
+            ui_set_sources(st->sources);                     /* (the idle message reset it) the ring: just the idle item, nothing to swipe to */
+            idle_screen_set_status(s_idle_selected ? "Idle screen" : "Nothing playing");
             show_screen(true);
         }                                                    /* else: a short gap - keep what is on screen until the delay is over */
         return;
@@ -259,7 +289,8 @@ static void on_state(const pc_media_state_t *st, void *ctx)
     }
     ui_set_progress(st->position_ms, st->playing);
     ui_set_capabilities(st->can_prev, st->can_next, st->can_seek);
-    idle_screen_set_status("Paused - tap to show the player");
+    idle_screen_set_status(s_idle_selected ? (st->any_playing ? "Playing in the background - tap for the player" : "Idle screen - tap for the player")
+                                           : "Paused - tap to show the player");
     show_screen(want_idle);                                  /* something plays -> player (at once); nothing for a while -> idle */
 }
 
@@ -393,6 +424,7 @@ void app_main(void)
         bsp_display_unlock();
     }
     idle_screen_init(on_idle_tap, NULL);
+    ui_attach_vertical_swipes(idle_screen_obj());          /* swipe up / down on the idle screen walks the source ring too */
 
     ESP_ERROR_CHECK(wifi_mgr_init(on_wifi_state, NULL));
     ESP_ERROR_CHECK(wifi_mgr_connect(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));

@@ -314,5 +314,125 @@ class Machine(unittest.TestCase):
         self.assertEqual(self.look([S("Spotify.exe", "playing"), S("chrome.exe", "playing")], 123.0, current="chrome.exe")[0], "chrome.exe")
 
 
+class IdleItem(unittest.TestCase):
+    """The idle screen as a synthetic item of the vertical ring (ADR-008): sessions alphabetical, "Idle Screen" last; a display
+    choice only; any session that starts playing ends the selection; no 20 s return."""
+
+    def setUp(self):
+        self.sel = m.Selector(idle_return_s=20.0)
+
+    def look(self, srcs, now, current=""):
+        notes = self.sel.observe(srcs, now)
+        return self.sel.order(srcs, current=current)[0], notes
+
+    def test_the_ring_ends_with_the_idle_item(self):
+        srcs = [SPOTIFY, CHROME, DEAD]
+        self.assertEqual(m.ring(srcs, idle=True), ["chrome.exe", "Spotify.exe", m.IDLE_ID])
+        self.assertEqual(m.ring(srcs), ["chrome.exe", "Spotify.exe"])                    # unchanged without the flag
+        self.assertEqual(m.ring([], idle=True), [m.IDLE_ID])                              # always available
+        self.assertEqual(m.ring([DEAD, BLANK], m.IDLE_ID, idle=True), [m.IDLE_ID])
+
+    def test_idle_is_not_confused_with_a_session(self):
+        self.assertEqual(m.friendly_name(m.IDLE_ID), "Idle Screen")
+        self.assertEqual(m.ring([SPOTIFY], m.IDLE_ID, idle=True), ["Spotify.exe", m.IDLE_ID])    # "displayed = idle" adds no phantom session
+
+    def test_swiping_walks_sessions_then_idle_and_wraps(self):
+        srcs = [SPOTIFY, CHROME]
+        self.assertEqual(m.step(srcs, "chrome.exe", +1, idle=True), "Spotify.exe")
+        self.assertEqual(m.step(srcs, "Spotify.exe", +1, idle=True), m.IDLE_ID)          # Spotify -> Idle Screen
+        self.assertEqual(m.step(srcs, m.IDLE_ID, +1, idle=True), "chrome.exe")           # wraps to the first session
+        self.assertEqual(m.step(srcs, m.IDLE_ID, -1, idle=True), "Spotify.exe")          # down from Idle reaches the neighbour
+        self.assertEqual(m.step(srcs, "chrome.exe", -1, idle=True), m.IDLE_ID)           # wraps backwards onto Idle
+
+    def test_one_session_plus_idle_is_two_sources_and_idle_alone_nothing_to_switch(self):
+        self.assertEqual(m.step([SPOTIFY], "Spotify.exe", +1, idle=True), m.IDLE_ID)
+        self.assertEqual(m.step([SPOTIFY], m.IDLE_ID, -1, idle=True), "Spotify.exe")
+        self.assertIsNone(m.step([], m.IDLE_ID, +1, idle=True))                           # only the idle item: a swipe does nothing
+        self.assertIsNone(m.step([DEAD], "", +1, idle=True))
+
+    def test_positions_count_the_idle_item(self):
+        srcs = [SPOTIFY, CHROME]
+        self.assertEqual(m.position(srcs, "chrome.exe", idle=True), (1, 3))
+        self.assertEqual(m.position(srcs, "Spotify.exe", idle=True), (2, 3))
+        self.assertEqual(m.position(srcs, m.IDLE_ID, idle=True), (3, 3))
+        self.assertEqual(m.position(srcs, "Spotify.exe"), (2, 2))
+
+    # -- the selection ----------------------------------------------------------------------------------------------------
+    def swipe_to_idle(self, srcs, now, current=""):
+        self.sel.observe(srcs, now)
+        return self.sel.select(m.IDLE_ID, srcs, current, now)
+
+    def test_idle_while_spotify_plays_is_a_manual_selection_that_stays(self):
+        srcs = [S("Spotify.exe", "playing"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.assertIs(self.swipe_to_idle(srcs, 5), m.Mode.MANUAL_TEMP)
+        self.assertTrue(self.sel.idle_selected)
+        self.assertEqual(self.look(srcs, 6)[0], "Spotify.exe")                  # the content underneath is what AUTO would show
+        for t in (30, 90, 600):                                                  # Spotify keeps playing: no 20 s return, no timeout
+            _, notes = self.look(srcs, t)
+            self.assertTrue(self.sel.idle_selected, f"left idle at t={t}: {notes}")
+
+    def test_idle_is_always_a_manual_choice_even_when_nothing_plays(self):
+        srcs = [S("Spotify.exe", "paused"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.assertIs(self.swipe_to_idle(srcs, 5), m.Mode.MANUAL_TEMP)           # no "AUTO would show the same" shortcut
+        self.look(srcs, 500)
+        self.assertTrue(self.sel.idle_selected)                                   # the user may remain on Idle
+
+    def test_a_session_starting_ends_the_idle_selection(self):
+        srcs = [S("Spotify.exe", "playing"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        srcs2 = [S("Spotify.exe", "playing"), S("chrome.exe", "playing")]        # YouTube starts
+        first, notes = self.look(srcs2, 8)
+        self.assertFalse(self.sel.idle_selected)
+        self.assertIs(self.sel.mode, m.Mode.AUTO)
+        self.assertEqual(first, "chrome.exe")                                    # auto-follow: the newly started session
+        self.assertTrue(any("leaving the idle screen" in n for n in notes))
+
+    def test_a_paused_session_resuming_ends_it_too(self):
+        srcs = [S("Spotify.exe", "playing"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        self.look([S("Spotify.exe", "paused"), S("chrome.exe", "paused")], 10)   # everything paused: still idle
+        self.assertTrue(self.sel.idle_selected)
+        self.assertEqual(self.look([S("Spotify.exe", "playing"), S("chrome.exe", "paused")], 20)[0], "Spotify.exe")
+        self.assertFalse(self.sel.idle_selected)
+
+    def test_a_brand_new_playing_session_ends_it(self):
+        srcs = [S("Spotify.exe", "playing")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        self.look(srcs + [S("vlc.exe", "playing")], 9)
+        self.assertFalse(self.sel.idle_selected)
+
+    def test_track_change_blips_do_not_leave_idle(self):
+        srcs = [S("Spotify.exe", "playing")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        self.look([S("Spotify.exe", "changing")], 6)                             # Spotify skipping to the next track
+        self.look([S("Spotify.exe", "opened")], 7)
+        self.look([S("Spotify.exe", "playing")], 8)
+        self.assertTrue(self.sel.idle_selected)
+
+    def test_sessions_disappearing_do_not_end_it_and_idle_never_disappears(self):
+        srcs = [S("Spotify.exe", "playing"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        self.sel.observe([], 9)                                                   # every session gone
+        self.assertTrue(self.sel.idle_selected)
+
+    def test_swiping_off_idle_selects_a_session_and_back_to_auto_clears_it(self):
+        srcs = [S("Spotify.exe", "playing"), S("chrome.exe", "paused")]
+        self.look(srcs, 0)
+        self.swipe_to_idle(srcs, 5)
+        self.assertIs(self.sel.select("chrome.exe", srcs, "", 6), m.Mode.MANUAL_TEMP)
+        self.assertFalse(self.sel.idle_selected)
+        self.assertEqual(self.sel.order(srcs)[0], "chrome.exe")                   # a normal manual selection again
+        self.swipe_to_idle(srcs, 7)
+        self.sel.to_auto()
+        self.assertFalse(self.sel.idle_selected)
+
+
 if __name__ == "__main__":
     unittest.main()

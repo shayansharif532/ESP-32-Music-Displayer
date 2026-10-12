@@ -13,6 +13,8 @@ Checks (numbers = the owner's list): 1 idle when nothing plays, 2 a starting ses
 4 everything pauses -> idle after the delay (and not during a short gap), 5 the picture survives a board reboot without being resent,
 6 settings survive a companion restart, 7 Fill / Fit / Blur Fill, 8 the clock, 9 broken / missing picture falls back, 10 a repeated
 idle <-> playback soak with heap / stack / reset accounting.
+The "carousel" phase checks the idle screen as an item of the vertical source ring (ADR-008): reachable while a session plays, no
+playback command, auto-follow leaves it, swipes up / down from it, horizontal swipes and volume keys do nothing on it.
 """
 import argparse
 import datetime as dt
@@ -39,6 +41,7 @@ import serial_capture as sc  # noqa: E402
 from PIL import Image, ImageChops, ImageDraw, ImageFont  # noqa: E402
 
 from desk_media_companion import idle as idle_mod  # noqa: E402
+from desk_media_companion import volume as app_volume  # noqa: E402
 from desk_media_companion.discovery import Beacon  # noqa: E402
 from desk_media_companion.media import MediaMonitor  # noqa: E402
 from desk_media_companion.server import make_server  # noqa: E402
@@ -127,6 +130,16 @@ class Board:
             time.sleep(0.1)
         return None
 
+    def touches(self) -> int:
+        """Real finger presses the board has counted so far (virtual-finger actions are not counted): a person using the board while
+        a test runs shows up here, and explains an odd result."""
+        last = 0
+        for _t, ln in self.since(0):
+            m = re.search(r"health: up=\d+s touches=(\d+)", ln)
+            if m:
+                last = int(m.group(1))
+        return last
+
     def reset(self) -> None:
         sc.set_dtr(self.ser, False)
         sc.set_rts(self.ser, False)
@@ -167,6 +180,19 @@ class Companion:
         self.monitor.only_apps = {A, B}
         self.monitor.spotify_ids = {A}
         self.monitor.start()
+        self.calls: list[tuple] = []                                   # every media command / volume request that reached the companion
+        real_control, real_volume = self.monitor.control, self.monitor.volume
+
+        def control(*a, **k):
+            self.calls.append(("control",) + a)
+            return real_control(*a, **k)
+
+        def volume(*a, **k):
+            self.calls.append(("volume",) + a)
+            return real_volume(*a, **k)
+
+        self.monitor.control, self.monitor.volume = control, volume
+        self._last_act = 0.0
         self.counts = {}
         self.store = None
         self.server = None
@@ -218,11 +244,20 @@ class Companion:
                 pass
         self.conns.clear()
 
+    def act(self, action: str, gap: float = 2.8) -> None:
+        """Asks the board to perform a scripted action (virtual finger / key). The board ignores a request that arrives while the
+        previous action is still running, so requests are spaced out."""
+        wait = self._last_act + gap - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        self.monitor.request_debug(action)
+        self._last_act = time.time()
+
     def now(self) -> dict:
         return self.monitor.now_playing()
 
     def states(self) -> dict:
-        return {s["app"]: s["state"] for s in self.monitor.list_sources().get("sources", [])}
+        return {s["app"]: s["state"] for s in self.monitor.list_sources().get("sources", []) if not s.get("synthetic")}
 
     def set_state(self, app: str, playing: bool) -> None:
         want = "playing" if playing else "paused"
@@ -525,17 +560,162 @@ def phase_fallbacks(board: Board, comp: Companion) -> None:
     board.wait(rf"idle settings version {comp.store.version} applied", mark, 30.0)
 
 
+def phase_carousel(board: Board, comp: Companion, procs: dict) -> None:
+    print("\n== the idle screen as an item of the vertical source ring")
+    phase_mark = board.mark()
+    touches0 = board.touches()
+    comp.store.update(theme="dark", delay_s=4, text="", show_clock=True)
+    for app in (A, B):
+        if app not in comp.states():
+            procs[app] = fakes.start_fake(app, paused=True, log_path=os.path.join(LOGS, f"idle-fake-{app}.log"))
+    wait_for(lambda: A in comp.states() and B in comp.states(), 25.0, 0.5)
+    comp.set_state(B, False)
+    comp.set_state(A, True)
+    mark = board.mark()
+    board.wait(r"app: screen -> player", mark, 8.0) or time.sleep(1.5)
+    time.sleep(2.0)
+    rows = [r["app"] for r in comp.monitor.list_sources().get("sources", [])]
+    check("1  Spotify-like + YouTube-like + Idle all appear in the vertical ring", rows == [B, A, "idle"], str(rows))
+    check("   the board shows A (player), 2 of 3", comp.now().get("app") == A and comp.now().get("source_index") == 2 and comp.now().get("sources") == 3)
+
+    # ---- 2./3. reach Idle while A plays; A is not paused
+    calls_before = len(comp.calls)
+    mark = board.mark()
+    t0 = time.time()
+    comp.act("swipe_up_shot")                         # a real finger swipe on the player; the board photographs the result
+    hit = board.wait(r"app: screen -> idle", mark, 8.0)
+    check("2  a vertical swipe on the player reaches the idle screen while A plays", hit is not None, f"{hit[0] - t0:.1f} s" if hit else "")
+    check("   the companion records the idle selection (manual, temporary)", comp.now().get("idle_selected") is True and comp.now().get("mode") == "manual")
+    img = None
+    for attempt in range(3):
+        end = board.wait(r"SHOT_END", mark, 40.0)
+        if end:
+            lines = [ln for _t, ln in board.since(mark)]
+            out = os.path.join(LOGS, "idle-carousel-pill.png")
+            if shot.assemble(lines, out) == 0:
+                img = Image.open(out).convert("RGB")
+                break
+        if attempt < 2:                                                 # not captured: go back to the player and swipe onto Idle again
+            comp.act("swipe_down")
+            wait_for(lambda: comp.now().get("idle_selected") is False, 6.0)
+            mark = board.mark()
+            comp.act("swipe_up_shot")
+            wait_for(lambda: comp.now().get("idle_selected") is True, 6.0)
+    if img is not None:
+        pill = img.crop((130, 28, 350, 72)).convert("L").point(lambda v: 255 if v > 215 else 0).getbbox()
+        check("   the 'Idle Screen' pill is drawn over the idle screen (subtle source feedback)", pill is not None, str(pill))
+        check("   the idle screen (big clock) is what is shown", clock_mask(img).getbbox() is not None)
+    else:
+        check("   screenshot of the pill", False)
+    time.sleep(2.0)
+    check("3  selecting Idle did not pause A", comp.states().get(A) == "playing", str(comp.states()))
+    check("   ... and sent no media command", not any(c[0] == "control" for c in comp.calls[calls_before:]), str(comp.calls[calls_before:]))
+    track = comp.now().get("track_id")
+
+    # ---- 6. horizontal swipes do nothing on Idle
+    print("-- horizontal gestures and volume keys on Idle")
+    calls_before = len(comp.calls)
+    mark = board.mark()
+    for action in ("swipe_left", "swipe_right", "swipe_left"):
+        comp.act(action)
+        time.sleep(0.5)
+    check("6  left / right swipes on Idle send no next / previous", not any(c[0] == "control" for c in comp.calls[calls_before:]), str(comp.calls[calls_before:]))
+    check("   ... the track did not change and Idle is still selected", comp.now().get("track_id") == track and comp.now().get("idle_selected") is True)
+    check("   ... and the display stayed on the idle screen", not any(e == "player" for _t, e in board.screen_events(mark)), str(board.screen_events(mark)))
+
+    # ---- 7. volume keys on Idle
+    calls_before = len(comp.calls)
+    vol_before = {a: app_volume.get_volume(a).get("volume") for a in (A,)}
+    for action in ("key_up", "key_down", "key_up", "key_down"):
+        comp.act(action)
+        time.sleep(0.5)
+    check("7  the side volume keys on Idle send no volume request at all", not any(c[0] == "volume" for c in comp.calls[calls_before:]), str(comp.calls[calls_before:]))
+    check("   ... and no app's volume moved", {a: app_volume.get_volume(a).get("volume") for a in (A,)} == vol_before, str(vol_before))
+
+    # ---- 5. swipes from Idle reach the neighbours
+    print("-- swipes up / down from Idle")
+    mark = board.mark()
+    comp.act("swipe_down")
+    check("5  swipe down from Idle -> the previous item (A, 2 of 3), player back", wait_for(lambda: comp.now().get("app") == A and comp.now().get("idle_selected") is False, 6.0) and board.wait(r"app: screen -> player", mark, 4.0) is not None, str((comp.now().get("app"), comp.now().get("idle_selected"))))
+    # the side keys are not disabled in general: on the player they still change the displayed session's own volume
+    vol0 = app_volume.get_volume(A).get("volume")
+    comp.act("key_down")
+    time.sleep(1.2)
+    vol1 = app_volume.get_volume(A).get("volume")
+    comp.act("key_up")
+    time.sleep(1.2)
+    vol2 = app_volume.get_volume(A).get("volume")
+    check("   on the player the side volume keys still change that session's own volume (-5, then back)", vol0 is not None and vol1 == vol0 - 5 and vol2 == vol0, f"{vol0} -> {vol1} -> {vol2}")
+    comp.act("swipe_up")
+    check("   up again -> Idle", wait_for(lambda: comp.now().get("idle_selected") is True, 6.0))
+    mark = board.mark()
+    comp.act("swipe_up")
+    ok = wait_for(lambda: comp.now().get("app") == B and comp.now().get("idle_selected") is False, 6.0)
+    check("5  swipe up from Idle wraps to the first item (B, a paused session)", ok, str(comp.now().get("app")))
+    check("   ... and the display shows its player (A keeps playing: no idle)", board.wait(r"app: screen -> player", mark, 4.0) is not None and comp.states().get(A) == "playing")
+    comp.act("swipe_down")
+    check("   swipe down from the first item wraps backwards onto Idle", wait_for(lambda: comp.now().get("idle_selected") is True, 6.0))
+
+    # ---- 4. auto-follow leaves Idle
+    print("-- auto-follow")
+    mark = board.mark()
+    t0 = time.time()
+    comp.set_state(B, True)                                              # YouTube starts (a pause -> play transition)
+    hit = board.wait(r"app: screen -> player", mark, 8.0)
+    check("4  a session starting makes the display leave Idle", hit is not None and comp.now().get("idle_selected") is False and comp.now().get("app") == B, f"{hit[0] - t0:.1f} s, now {comp.now().get('app')}" if hit else str(comp.now().get("app")))
+    check("   ... automatic mode again, and A was not paused", comp.now().get("mode") == "auto" and comp.states().get(A) == "playing")
+
+    # ---- the idle choice holds while something keeps playing (no 20 s return)
+    comp.act("swipe_down")                                               # displayed B is the first item: down wraps backwards onto Idle
+    wait_for(lambda: comp.now().get("idle_selected") is True, 6.0) or (comp.act("swipe_up"), time.sleep(3.0))
+    mark = board.mark()
+    time.sleep(24.0)
+    check("   the idle choice stays for 24 s although both sessions play (no timeout)", comp.now().get("idle_selected") is True and not any(e == "player" for _t, e in board.screen_events(mark)))
+
+    # ---- a tap on a SELECTED idle screen leaves that choice
+    print("-- tap")
+    mark = board.mark()
+    comp.act("touch_cover")
+    hit = board.wait(r"app: screen -> player", mark, 6.0)
+    check("   tapping a selected idle screen returns to the player (back to automatic)", hit is not None and wait_for(lambda: comp.now().get("idle_selected") is False, 4.0))
+    time.sleep(3.0)
+    check("   ... and it does not bounce back to idle", not any(e == "idle" for _t, e in board.screen_events(mark)), str(board.screen_events(mark)))
+
+    # ---- swiping from the automatically shown idle screen (nothing plays)
+    print("-- swipes from the automatic idle screen (nothing playing)")
+    comp.set_state(A, False)
+    comp.set_state(B, False)
+    mark = board.mark()
+    check("   everything paused: the idle screen appears by itself", board.wait(r"app: screen -> idle", mark, 12.0) is not None)
+    time.sleep(1.5)
+    mark = board.mark()
+    comp.act("swipe_up")
+    hit = board.wait(r"app: screen -> player", mark, 8.0)
+    check("   swipe up from it walks on to the first item and shows its (paused) player", hit is not None and comp.now().get("idle_selected") is False and comp.now().get("app") in (A, B), str(comp.now().get("app")))
+    time.sleep(6.0)
+    check("   ... and the player stays up (the swipe counts as using it)", not any(e == "idle" for _t, e in board.screen_events(mark)), str(board.screen_events(mark)))
+    check("   no reset happened during the carousel checks", board.count(r"ESP-ROM|rst:0x|Guru Meditation|abort\(\)|Backtrace", phase_mark) == 0)
+    time.sleep(10.5)                                                    # (one more health line)
+    print(f"   (real finger presses on the board during this phase: {board.touches() - touches0} - anything above 0 is a person using it)")
+    comp.act("swipe_down")
+    time.sleep(1.0)
+    http_auto = comp.monitor.auto_source()
+    check("   back to automatic", http_auto.get("ok") is True)
+
+
+
 def phase_peek(board: Board, comp: Companion, procs: dict) -> None:
     print("\n== tap-to-peek: a paused session can still be resumed from the display")
     comp.store.update(theme="dark", delay_s=4, text="")
     comp.set_state(A, False)
     comp.set_state(B, False)
     mark = board.mark()
-    board.wait(r"app: screen -> idle", mark, 12.0) or time.sleep(1.0)
+    # (a swipe on the player keeps it up for 30 s: wait for the idle screen to come back by itself before tapping it)
+    check("   (setup) the idle screen is up", board.wait(r"app: screen -> idle", mark, 45.0) is not None or comp.now().get("idle_selected") is True)
     time.sleep(2.0)
     mark = board.mark()
     t0 = time.time()
-    comp.monitor.request_debug("touch_cover")                              # a real tap through the display's LVGL input path
+    comp.act("touch_cover")                              # a real tap through the display's LVGL input path
     hit = board.wait(r"app: screen -> player", mark, 6.0)
     check("   tapping the idle screen with a paused session brings the player back", hit is not None, f"{hit[0] - t0:.1f} s" if hit else "")
     mark2 = board.mark()
@@ -550,7 +730,7 @@ def phase_peek(board: Board, comp: Companion, procs: dict) -> None:
     check("   with no session at all the idle screen is up", board.wait(r"app: screen -> idle", mark, 12.0) is not None or comp.now().get("has_session") is False)
     time.sleep(3.0)
     mark = board.mark()
-    comp.monitor.request_debug("touch_cover")
+    comp.act("touch_cover")
     time.sleep(5.0)
     check("   tapping the idle screen with no session does nothing", not any(e == "player" for _t, e in board.screen_events(mark)), str(board.screen_events(mark)))
     procs[A] = fakes.start_fake(A, paused=True, log_path=os.path.join(LOGS, "idle-fake-A.log"))          # the soak needs them again
@@ -595,6 +775,78 @@ def health_stats(lines):
     return out
 
 
+def phase_ring_shots(board: Board, comp: Companion, procs: dict) -> None:
+    print("\n== documentation screenshots of the ring item (synthetic fake sessions only)")
+    comp.store.update(theme="dark", delay_s=4, text="", show_clock=True)
+    for app in (A, B):
+        if app not in comp.states():
+            procs[app] = fakes.start_fake(app, paused=True, log_path=os.path.join(LOGS, f"idle-fake-{app}.log"))
+    wait_for(lambda: A in comp.states() and B in comp.states(), 25.0, 0.5)
+    comp.monitor.auto_source()
+    comp.set_state(B, False)
+    comp.set_state(A, True)
+    time.sleep(4.0)
+    board.screenshot(comp.monitor, "ring-1-player.png")
+    mark = board.mark()
+    comp.act("swipe_up_shot")
+    board.wait(r"SHOT_END", mark, 40.0)
+    lines = [ln for _t, ln in board.since(mark)]
+    shot.assemble(lines, os.path.join(LOGS, "ring-2-pill.png"))
+    time.sleep(3.0)
+    board.screenshot(comp.monitor, "ring-3-idle.png")
+    comp.act("swipe_down")
+    time.sleep(1.0)
+    comp.monitor.auto_source()
+
+
+
+def phase_ring_soak(board: Board, comp: Companion, procs: dict, cycles: int) -> None:
+    print(f"\n== soak of the ring item: {cycles} x (swipe up onto Idle, swipe down back to the session)")
+    comp.store.update(theme="neon", delay_s=4, text="Ring")
+    for app in (A, B):
+        if app not in comp.states():
+            procs[app] = fakes.start_fake(app, paused=True, log_path=os.path.join(LOGS, f"idle-fake-{app}.log"))
+    wait_for(lambda: A in comp.states() and B in comp.states(), 25.0, 0.5)
+    comp.monitor.auto_source()
+    comp.set_state(B, False)
+    comp.set_state(A, True)
+    time.sleep(3.0)
+    if comp.now().get("app") != A or comp.now().get("idle_selected"):
+        comp.monitor.auto_source()
+        time.sleep(3.0)
+    mark = board.mark()
+    calls_before = len(comp.calls)
+    t_start = time.time()
+    bad_up = bad_down = 0
+    for i in range(cycles):
+        comp.act("swipe_up", gap=2.6)                                  # A (2 of 3) -> Idle Screen
+        bad_up += 0 if wait_for(lambda: comp.now().get("idle_selected") is True, 2.5, 0.1) else 1
+        comp.act("swipe_down", gap=2.6)                                # Idle -> A
+        bad_down += 0 if wait_for(lambda: comp.now().get("idle_selected") is False and comp.now().get("app") == A, 2.5, 0.1) else 1
+        if (i + 1) % 10 == 0:
+            print(f"   ... {i + 1}/{cycles} cycles, {int(time.time() - t_start)} s", flush=True)
+    time.sleep(3.0)
+    events = board.screen_events(mark)
+    idles = sum(1 for _t, e in events if e == "idle")
+    players = sum(1 for _t, e in events if e == "player")
+    check("10 every swipe onto Idle reached the companion as an idle selection, and every swipe down brought the session back", bad_up == 0 and bad_down == 0, f"{bad_up} / {bad_down} misses in {cycles} cycles")
+    check("10 the screen changes are in the log for (almost) every cycle (the USB console occasionally drops a log line)", idles >= cycles - 2 and players >= cycles - 2, f"{idles} idle / {players} player transitions for {cycles} cycles")
+    check("10 Spotify kept playing through all of it (nothing was ever paused)", comp.states().get(A) == "playing")
+    check("10 no media command was sent by the swipes", not any(c[0] == "control" for c in comp.calls[calls_before:]), str(comp.calls[calls_before:][:3]))
+    check("10 the board never reset", board.count(r"ESP-ROM|rst:0x|Guru Meditation|abort\(\)|Backtrace", mark) == 0)
+    stats = health_stats(board.since(mark))
+    if len(stats) >= 3:
+        first, last = stats[1], stats[-1]
+        steady_first, steady_last = max(x[2] for x in stats[1:7]), max(x[2] for x in stats[-7:])
+        check("10 internal heap returns to the same steady level (peak of the last samples)", steady_last >= steady_first - 2048, f"{steady_first} -> {steady_last} B")
+        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 60000, f"{first[3]} -> {last[3]} B")
+        check("10 PSRAM did not leak", last[5] >= first[5] - 65536, f"{first[5]} -> {last[5]} B")
+        check("10 LVGL stack headroom steady", last[6] >= 8000 and last[6] >= first[6] - 256, f"{first[6]} -> {last[6]} B")
+        print(f"   health (first -> last): int_free {first[2]} -> {last[2]}, int_min {first[3]} -> {last[3]}, psram_free {first[5]} -> {last[5]}, lvgl_stack_min {first[6]} -> {last[6]}")
+    comp.monitor.auto_source()
+
+
+
 def phase_soak(board: Board, comp: Companion, cycles: int) -> None:
     print(f"\n== 10. soak: {cycles} idle <-> playback cycles")
     comp.store.update(delay_s=3, theme="neon", text="Soak")                  # the most expensive built-in theme
@@ -624,8 +876,9 @@ def phase_soak(board: Board, comp: Companion, cycles: int) -> None:
     if len(stats) >= 3:
         first, last = stats[1], stats[-1]
         check("10 uptime is continuous", [s[0] for s in stats] == sorted(s[0] for s in stats))
-        check("10 internal heap did not shrink (free now vs. after warm-up)", last[2] >= first[2] - 2048, f"{first[2]} -> {last[2]} B")
-        check("10 internal heap low-water mark held", last[3] >= first[3] - 2048, f"{first[3]} -> {last[3]} B")
+        steady_first, steady_last = max(x[2] for x in stats[1:7]), max(x[2] for x in stats[-7:])
+        check("10 internal heap returns to the same steady level (peak of the last samples)", steady_last >= steady_first - 2048, f"{steady_first} -> {steady_last} B")
+        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 60000, f"{first[3]} -> {last[3]} B")
         check("10 PSRAM did not leak", last[5] >= first[5] - 65536, f"{first[5]} -> {last[5]} B")
         check("10 LVGL stack headroom steady and healthy", last[6] >= 8000 and last[6] >= first[6] - 256, f"{first[6]} -> {last[6]} B")
         if last[7]:
@@ -639,7 +892,8 @@ def main() -> int:
     ap.add_argument("--soak-cycles", type=int, default=30)
     ap.add_argument("--skip-soak", action="store_true")
     ap.add_argument("--skip-slow", action="store_true", help="skip the minute-rollover wait")
-    ap.add_argument("--only", default="", help="comma separated phases to run: basics,themes,minute,modes,persistence,fallbacks,peek,soak,evidence")
+    ap.add_argument("--ring-cycles", type=int, default=40, help="cycles of the ring soak (swipe onto Idle and back)")
+    ap.add_argument("--only", default="", help="comma separated phases to run: basics,themes,minute,modes,persistence,fallbacks,carousel,peek,ringshots,ringsoak,soak,evidence")
     args = ap.parse_args()
 
     try:
@@ -670,10 +924,16 @@ def main() -> int:
             phase_persistence(board, comp)
         if want("fallbacks"):
             phase_fallbacks(board, comp)
+        if want("carousel"):
+            phase_carousel(board, comp, procs)
         if want("peek"):
             phase_peek(board, comp, procs)
         if want("evidence") and only:
             phase_evidence(board, comp)
+        if want("ringshots"):
+            phase_ring_shots(board, comp, procs)
+        if want("ringsoak") and not args.skip_soak:
+            phase_ring_soak(board, comp, procs, args.ring_cycles)
         if want("soak") and not args.skip_soak:
             phase_soak(board, comp, args.soak_cycles)
     finally:

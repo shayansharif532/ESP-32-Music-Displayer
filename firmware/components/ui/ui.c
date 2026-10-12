@@ -9,6 +9,7 @@
  *   - horizontal swipe on the screen: left = next track, right = previous track (not from the progress bar)
  *   - vertical swipe on the screen: up = next media source (another app's session on the PC), down = previous source;
  *     a short pill shows the source's name (not from the progress bar, nothing happens with a single source)
+ *   - the idle screen is one more item of the source ring ("Idle Screen", last): it understands the vertical swipe too (not the horizontal one)
  *   - a short translucent "Volume 65%" pill on top when the side buttons change the volume
  * Spotify only: two small buttons flank the transport row - shuffle (left of previous) and repeat (right of next; off ->
  * playlist -> track). Subtle when off, Spotify green with a dot when on, a "1" on the repeat icon for "repeat the track".
@@ -80,6 +81,8 @@ static struct {
     lv_obj_t *slider, *t_elapsed, *t_total;
     lv_obj_t *btn_prev, *btn_play, *btn_next, *lbl_play;
     lv_obj_t *btn_shuffle, *btn_repeat, *lbl_shuffle, *lbl_repeat, *lbl_repeat1, *dot_shuffle, *dot_repeat;   /* Spotify only */
+    lv_obj_t *scr;                       /* the player screen (the active screen when ui_init ran) */
+    lv_obj_t *swipe_scr;                 /* a second screen that also understands vertical swipes (the idle screen), NULL = none */
     lv_obj_t *fx, *fx_lbl;               /* swipe feedback (top-most) */
     lv_obj_t *vol, *vol_lbl, *vol_bar;   /* volume / source pill (top-most) */
     lv_obj_t *dots[SRC_DOTS_MAX];        /* source position dots inside the pill (instead of the volume bar) */
@@ -386,6 +389,7 @@ static void on_screen_touch(lv_event_t *e)
     }
     lv_point_t p;
     lv_indev_get_point(indev, &p);
+    const bool on_player = lv_event_get_current_target(e) != (void *)s.swipe_scr;     /* the second screen (idle): vertical swipes only */
 
     if (code == LV_EVENT_PRESSED) {
         sw.tracking = true;
@@ -422,6 +426,9 @@ static void on_screen_touch(lv_event_t *e)
     sw.swiped = true;
     sw.tracking = false;
     lv_indev_wait_release(indev);                        /* no release / click on whatever the finger started on */
+    if (horizontal && !on_player) {
+        return;                                          /* nothing to skip / seek on the idle screen: the swipe is simply consumed */
+    }
     if (horizontal) {
         if (dx < 0) {                                    /* swipe left -> next track */
             if (s.can_next) {
@@ -434,10 +441,14 @@ static void on_screen_touch(lv_event_t *e)
         }
     } else if (s.sources >= 2) {                         /* vertical: another media source exists */
         if (dy < 0) {                                    /* swipe up -> next source */
-            show_swipe_fx(LV_SYMBOL_UP, 0, -1);
+            if (on_player) {
+                show_swipe_fx(LV_SYMBOL_UP, 0, -1);
+            }
             fire(UI_CMD_SOURCE_NEXT, 0);
         } else {                                         /* swipe down -> previous source */
-            show_swipe_fx(LV_SYMBOL_DOWN, 0, +1);
+            if (on_player) {
+                show_swipe_fx(LV_SYMBOL_DOWN, 0, +1);
+            }
             fire(UI_CMD_SOURCE_PREV, 0);
         }
     }
@@ -648,6 +659,7 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     s.art_w = s.art_h = UI_ART_SIZE;
 
     lv_obj_t *scr = lv_screen_active();
+    s.scr = scr;
     lv_obj_set_style_bg_color(scr, lv_color_hex(COL_SCREEN_TOP), 0);
     lv_obj_set_style_bg_grad_color(scr, lv_color_hex(COL_SCREEN_BOT), 0);
     lv_obj_set_style_bg_grad_dir(scr, LV_GRAD_DIR_VER, 0);
@@ -959,6 +971,17 @@ void ui_set_sources(int count)
     bsp_display_unlock();
 }
 
+/* The pill lives on one screen at a time: the one that is (becoming) visible. LVGL lock held by the caller. */
+static void pill_attach(lv_obj_t *screen)
+{
+    screen = screen ? screen : s.scr;
+    if (lv_obj_get_parent(s.vol) != screen) {
+        lv_obj_set_parent(s.vol, screen);
+    }
+    lv_obj_align(s.vol, LV_ALIGN_TOP_MID, 0, screen == s.scr ? 20 : 40);     /* on another screen (idle) it clears that screen's small top caption */
+    lv_obj_move_foreground(s.vol);
+}
+
 /* Shows the pill (volume or source) and (re)starts its hold-then-fade timer. LVGL lock held by the caller. */
 static void pill_show(uint32_t hold_ms)
 {
@@ -972,9 +995,15 @@ static void pill_show(uint32_t hold_ms)
 
 void ui_show_source(const char *name, int index, int count)
 {
+    ui_show_source_on(NULL, name, index, count);
+}
+
+void ui_show_source_on(lv_obj_t *screen, const char *name, int index, int count)
+{
     if (!s.ready || !bsp_display_lock(1000)) {
         return;
     }
+    pill_attach(screen);
     lv_label_set_text(s.vol_lbl, (name && name[0]) ? name : "Source");
     lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
     lv_obj_add_flag(s.vol_bar, LV_OBJ_FLAG_HIDDEN);
@@ -998,6 +1027,7 @@ void ui_show_volume(int percent, bool muted)
     if (!s.ready || !bsp_display_lock(1000)) {
         return;
     }
+    pill_attach(NULL);                                   /* volume is shown on the player screen */
     char buf[40];
     if (percent < 0) {
         snprintf(buf, sizeof buf, "%s", percent == -2 ? LV_SYMBOL_WARNING "  PC not reachable" : LV_SYMBOL_MUTE "  No volume control");
@@ -1017,6 +1047,22 @@ void ui_show_volume(int percent, bool muted)
     }
     pill_show(VOL_HOLD_MS);
     bsp_display_unlock();
+}
+
+void ui_attach_vertical_swipes(lv_obj_t *screen)
+{
+    if (!s.ready || !screen || !bsp_display_lock(1000)) {
+        return;
+    }
+    s.swipe_scr = screen;
+    lv_obj_add_event_cb(screen, on_screen_touch, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(screen, on_screen_touch, LV_EVENT_PRESSING, NULL);
+    bsp_display_unlock();
+}
+
+bool ui_touch_moved(void)
+{
+    return sw.moved;
 }
 
 uint32_t ui_touch_count(void)

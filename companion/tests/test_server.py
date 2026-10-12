@@ -106,6 +106,11 @@ class Api(unittest.TestCase):
         self.req("POST", "/control/source-auto")
         self.assertEqual(self.mon.calls, [("source", 1, "Spotify.exe"), ("source", -1, "chrome.exe"), ("source", 1, ""), ("auto",)])
 
+    def test_the_idle_item_is_named_by_the_display_in_source_requests(self):
+        self.req("POST", "/control/source-next?from=idle")
+        self.req("POST", "/control/source-prev?from=idle")
+        self.assertEqual(self.mon.calls, [("source", 1, "idle"), ("source", -1, "idle")])
+
     def test_app_ids_with_special_characters_survive_url_encoding(self):
         self.req("POST", "/control/next?app=Microsoft.ZuneMusic_8wekyb3d8bbwe%21Microsoft.ZuneMusic")
         self.assertEqual(self.mon.calls[-1][3], "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic")
@@ -122,6 +127,22 @@ class Api(unittest.TestCase):
 
     def test_unknown_control_is_404(self):
         self.assertEqual(self.req("POST", "/control/explode")[0], 404)
+
+
+class IdleItemGuards(unittest.TestCase):
+    """The synthetic idle item is a display choice, not a media session: nothing that controls media may reach an app through it."""
+
+    def test_media_commands_and_volume_aimed_at_idle_are_refused_before_any_session_is_touched(self):
+        from desk_media_companion.media import MediaMonitor
+        mon = MediaMonitor()                     # never started: these refusals must not need the Windows media API at all
+        for action in ("playpause", "next", "previous", "seek", "shuffle"):
+            r = mon.control(action, 1000, "idle")
+            self.assertFalse(r["ok"], action)
+            self.assertIn("idle", r["error"])
+        for action in ("volume-up", "volume-down", "volume-set", "get"):
+            r = mon.volume(action, level=10, app="IDLE")
+            self.assertFalse(r["ok"], action)
+            self.assertIsNone(r["volume"])
 
 
 class IdleRoutes(unittest.TestCase):

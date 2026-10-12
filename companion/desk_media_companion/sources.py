@@ -12,6 +12,12 @@ The selection model (ADR-005, refined by ADR-006) is an explicit two-state machi
       MANUAL_IDLE_RETURN_S seconds (nobody is "interacting" with it any more),
     - or when a swipe lands on the session AUTO would show anyway (that is simply AUTO).
   A selected session that starts playing (the user pressed play on it) is not a reason to leave it.
+* The idle screen (ADR-008) is one more item of the swipe ring: a SYNTHETIC source with the identity `IDLE_ID` ("idle"), always last, never
+  a Windows session. Swiping onto it is a MANUAL_TEMP selection like any other - a display choice, never a playback command - with two
+  differences: it cannot disappear, and the 20 s return does not apply (it is chosen precisely while something plays in the
+  background). It ends when ANY session starts playing (a pause -> play transition or a new playing session), exactly as the user
+  asked: "if a media session newly starts playing after Idle was selected, switch back to it". Until then the content of the
+  snapshot is what AUTO would show (so the player is current underneath).
 * The swipe list ("sources", the ring) holds the sessions that are worth showing: playing or paused ones that carry media
   metadata. Dead / metadata-less sessions are left out; the session on screen is always part of it. The order is fixed
   (alphabetical by app name), so repeated swipes walk through the same ring and wrap around at the ends.
@@ -24,6 +30,8 @@ from enum import Enum
 from typing import Iterable, Optional
 
 MANUAL_IDLE_RETURN_S = 20.0      # see MANUAL_TEMP above
+IDLE_ID = "idle"                 # the synthetic ring item for the idle screen (not a Windows session; no real app has this id)
+IDLE_NAME = "Idle Screen"        # what the source pill shows
 
 # Windows app ids -> short names for the on-screen label.
 _KNOWN = {
@@ -47,6 +55,8 @@ class Source:
 def friendly_name(app_id: str) -> str:
     """Short, human name of a Windows app id (<= 23 characters)."""
     a = (app_id or "").strip()
+    if a.lower() == IDLE_ID:
+        return IDLE_NAME
     if not a:
         return "Unknown"
     base = a.split("!")[-1] if "!" in a else a                   # Store app: PackageFamilyName!AppId
@@ -163,7 +173,12 @@ class Selector:
         if started:
             notes.append("started playing: " + ", ".join(started))
 
-        if self.mode is Mode.MANUAL_TEMP:
+        if self.mode is Mode.MANUAL_TEMP and _same(self.manual, IDLE_ID):
+            # the idle screen was chosen: it can neither disappear nor "time out" (it is chosen while something plays in the
+            # background); any session that starts playing - including a paused one resuming - ends the selection
+            if started:
+                notes.append(self._to_auto(f"{started[0]} started playing (leaving the idle screen)"))
+        elif self.mode is Mode.MANUAL_TEMP:
             manual = _find(apps, self.manual)
             others_started = [a for a in started if not _same(a, self.manual)]
             others_playing = [a for a in playing if not _same(a, self.manual)]
@@ -178,13 +193,22 @@ class Selector:
 
     # -- the user -------------------------------------------------------------------------------------------------------
     def select(self, app: str, sources: list[Source], current: str, now: float) -> Mode:
-        """A vertical swipe landed on `app`. Landing on what AUTO would show anyway is simply AUTO."""
+        """A vertical swipe landed on `app`. Landing on what AUTO would show anyway is simply AUTO. The idle screen is always a manual choice
+        (AUTO shows sessions, never the synthetic item)."""
+        if _same(app, IDLE_ID):
+            self.mode, self.manual, self.last_interaction = Mode.MANUAL_TEMP, IDLE_ID, now
+            return self.mode
         auto_first = candidate_order(sources, current=current, last_playing=self.last_playing, since=self._since)[:1]
         if auto_first and _same(auto_first[0], app):
             self._to_auto("")
         else:
             self.mode, self.manual, self.last_interaction = Mode.MANUAL_TEMP, app, now
         return self.mode
+
+    @property
+    def idle_selected(self) -> bool:
+        """The user swiped onto the idle screen (and nothing has started playing since)."""
+        return self.mode is Mode.MANUAL_TEMP and _same(self.manual, IDLE_ID)
 
     def touch(self, now: float, app: str = "") -> None:
         """The user dealt with the displayed session (a control, seek, volume, another swipe): restarts the idle timer."""
@@ -200,24 +224,27 @@ class Selector:
 
     # -- the answer -----------------------------------------------------------------------------------------------------
     def order(self, sources: list[Source], current: str = "", wanted: str = "") -> list[str]:
-        return candidate_order(sources, current=current, manual=self.manual if self.mode is Mode.MANUAL_TEMP else "",
+        manual = self.manual if self.mode is Mode.MANUAL_TEMP and not self.idle_selected else ""    # idle selected: what AUTO would show
+        return candidate_order(sources, current=current, manual=manual,
                                last_playing=self.last_playing, prefer=self.prefer, wanted=wanted, since=self._since)
 
 
-def ring(sources: list[Source], displayed: str = "") -> list[str]:
-    """The fixed, wrapping list of apps a vertical swipe walks through (usable sessions + the one on screen)."""
+def ring(sources: list[Source], displayed: str = "", idle: bool = False) -> list[str]:
+    """The fixed, wrapping list of apps a vertical swipe walks through (usable sessions + the one on screen), alphabetical.
+    idle=True adds the synthetic idle-screen item at the end ("Spotify, Chrome, Idle Screen")."""
     apps = [s.app for s in sources if is_usable(s)]
-    if displayed:
+    if displayed and not _same(displayed, IDLE_ID):
         shown = _find((s.app for s in sources), displayed)
         if shown and not _find(apps, shown):
             apps.append(shown)
-    return sorted(apps, key=lambda a: (friendly_name(a).lower(), a.lower()))
+    apps = sorted(apps, key=lambda a: (friendly_name(a).lower(), a.lower()))
+    return apps + [IDLE_ID] if idle else apps
 
 
-def step(sources: list[Source], displayed: str, direction: int) -> Optional[str]:
+def step(sources: list[Source], displayed: str, direction: int, idle: bool = False) -> Optional[str]:
     """The app a swipe moves to: direction +1 = next source, -1 = previous source (wraps around). None when there is
-    nothing to switch to (fewer than two sources)."""
-    apps = ring(sources, displayed)
+    nothing to switch to (fewer than two sources). `displayed` may be IDLE_ID when idle=True."""
+    apps = ring(sources, displayed, idle)
     if len(apps) < 2:
         return None
     here = next((i for i, a in enumerate(apps) if displayed and _same(a, displayed)), None)
@@ -226,9 +253,9 @@ def step(sources: list[Source], displayed: str, direction: int) -> Optional[str]
     return apps[(here + (1 if direction >= 0 else -1)) % len(apps)]
 
 
-def position(sources: list[Source], displayed: str) -> tuple[int, int]:
+def position(sources: list[Source], displayed: str, idle: bool = False) -> tuple[int, int]:
     """(1-based index of the displayed app in the ring, ring size); (0, size) when it is not in the ring."""
-    apps = ring(sources, displayed)
+    apps = ring(sources, displayed, idle)
     for i, a in enumerate(apps):
         if displayed and _same(a, displayed):
             return i + 1, len(apps)

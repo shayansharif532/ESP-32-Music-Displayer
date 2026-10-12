@@ -17,8 +17,12 @@
                                    previous usable media session, wrapping around; pins the display to it. `from` = the app on
                                    screen. -> {"ok":true,"changed":true,"app":"chrome.exe","source":"Chrome","index":1,"count":2,
                                    "now":{...the new /now-playing...}}; changed=false when there is only one source)
-    POST /control/source-auto      back to automatic (follow the best session)
-    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|manual
+    POST /control/source-auto      back to automatic (follow the best session; also leaves a manual "Idle Screen" choice)
+    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|manual. The last row is the
+                                   synthetic idle-screen item {"app":"idle","name":"Idle Screen","state":"idle","synthetic":true} (ADR-008):
+                                   always offered, never a Windows session. A swipe onto it (`from=` may be "idle" when the display shows it)
+                                   is a manual, temporary display choice: /now-playing then has idle_selected:true, media keeps playing,
+                                   any control / volume request with app=idle is refused, and it ends when any session starts playing
     POST /control/shuffle[?app=Spotify.exe]   Spotify only: toggle shuffle (also /shuffle-on /shuffle-off)
     POST /control/repeat[?app=...]            Spotify only: cycle repeat off -> list -> track -> off (also /repeat-off /repeat-list /repeat-track)
                                    -> {"ok":true,"app":"Spotify.exe","spotify":true,"shuffle":true,"repeat":1,"can_shuffle":true,"can_repeat":true,"now":{...}}

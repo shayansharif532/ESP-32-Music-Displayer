@@ -290,6 +290,12 @@ Replaces the generic "Nothing playing" player placeholder when the PC companion 
 - **Personal / generic separation (owner rule)**: the framework is committed; personal assets are not. `.gitignore` blocks `idle/settings.json`, `idle/background.jpg`, `idle/original.bin`, `idle-assets/`, `personal/`, `private/`. Before committing anything near this feature, grep the staged files for personal names and image file names.
 - Test tooling: `tools/idle_test.py` (board-in-the-loop with an in-process companion that sees only two silent fake sessions: transitions, delay, picture + reboot persistence, companion restart, Fill / Fit / Blur Fill by pixel checks, the clock against the real typeface, corrupt pictures, and a repeated idle <-> playback soak with heap / stack / reset accounting).
 
+### Milestone 9b - the idle screen as an item of the vertical source ring (BUILT 2026-10-12; evidence: `docs/milestones/M9b-idle-source.md`; ADR-008)
+
+Owner request after using M9: `Spotify <-> Chrome <-> Idle Screen`. The ring (`sources.ring(..., idle=True)`) always ends with the synthetic item `idle` (`IDLE_ID`; never a Windows session; offered whenever the companion is connected). Swiping onto it = a MANUAL_TEMP selection (`Selector.idle_selected`): a display choice only - media keeps playing, nothing is sent to any app; `/now-playing` has `idle_selected` and counts the item in `sources` / `source_index`;
+it ends when **any session starts playing** (auto-follow), by `source-auto` or a tap, and it never times out (the 20 s return does not apply). While Idle is shown the side volume keys and horizontal swipes do nothing and every `app=idle` request is refused; vertical swipes work on the idle screen (`ui_attach_vertical_swipes`) and the source pill follows the visible screen. The display sends `from=idle` when it shows the idle screen (selected or automatic).
+Tests: `tools/idle_source_test.py` (isolated, API level), the `carousel` phase of `tools/idle_test.py` (board: real swipes, keys, auto-follow, tap), 13 new model tests in `test_sources.py`.
+
 ### Milestone 10 - Full-screen album-art polish
 
 The tap-the-cover full-screen mode works (cover grows to 456x456, chrome hides, tap again to return) but the cover is the 312 px image stretched, so it is soft.

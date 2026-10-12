@@ -78,6 +78,18 @@ void ui_set_sources(int count);
  * small dots). Shares the pill slot with the volume overlay; fades after about a second. */
 void ui_show_source(const char *name, int index, int count);
 
+/* The same pill, drawn over another screen: the pill follows the screen that is (becoming) visible, e.g. the idle screen when the
+ * user swiped onto the "Idle Screen" item of the source ring. NULL = the player screen. */
+void ui_show_source_on(lv_obj_t *screen, const char *name, int index, int count);
+
+/* Vertical swipes (up = next source, down = previous source) also work on another full-screen LVGL screen, e.g. the idle screen: the
+ * same thresholds and safeguards as on the player; horizontal swipes do nothing there. A swipe consumes its touch (no tap follows). */
+void ui_attach_vertical_swipes(lv_obj_t *screen);
+
+/* The touch that is just ending travelled further than a tap may (a sloppy swipe): handlers of a "tap" on another screen use this to
+ * ignore it. Valid inside a CLICKED callback. */
+bool ui_touch_moved(void);
+
 /* Monotonic count of touch presses seen by the UI (for soak-test logging). */
 uint32_t ui_touch_count(void);
 

@@ -78,6 +78,10 @@ the track changes), `art_id` (changes when the artwork changes; `""` = none), `c
 `can_seek`, `seq` (bumps on any visible change), and the source fields `source` (short app name, "Spotify" / "Chrome" / "Edge"), `sources` (how many
 sessions a vertical swipe can switch between), `source_index` (1-based position in that ring), `mode` (`"manual"` while this session is a temporary manual selection, else `"auto"`), and - for Spotify only - `spotify` (true), `shuffle`, `repeat` (0 off, 1 playlist / album, 2 track), `can_shuffle`, `can_repeat` (all false / 0 for every other app).
 
+The idle screen is also an item of the swipe ring (ADR-008): `GET /sources` ends with the synthetic row `{"app":"idle","name":"Idle Screen","state":"idle","synthetic":true,"displayed":...}`, `source-next` / `source-prev` accept `from=idle` (the display shows the idle screen) and answer with `"app":"idle","source":"Idle Screen","idle":true`,
+`/now-playing` carries `idle_selected` (true = the user swiped onto it: a manual, temporary display choice - media keeps playing, the other fields still describe what AUTO would show) and `sources` / `source_index` count the item. It ends when any session starts playing, on `source-auto`, or by a tap on the display; the 20 s return does not apply to it.
+Every `/control/*` and volume request with `app=idle` is refused (`ok:false`, "the idle screen is selected: nothing to control").
+
 Idle-screen fields of `/now-playing` (ADR-007): `any_playing` (some usable session is playing anywhere - the display shows its idle screen when this is false for the user's delay), `idle_v` (the settings version: the display
 fetches `/idle` when it differs from the one it stored) and `clock_ms` (the PC's local time as milliseconds since the epoch, UTC + offset, for the clock). Older companions send none of them (the display then follows `playing`, and shows no clock).
 

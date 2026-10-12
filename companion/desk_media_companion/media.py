@@ -172,6 +172,8 @@ class MediaMonitor:
     def control(self, action: str, position_ms: Optional[int] = None, app: str = "") -> dict[str, Any]:
         """Transport control of the session on screen. `app` = the app id the display says it shows: the command goes to
         exactly that session (and is refused if it no longer exists), never to whatever else became active meanwhile."""
+        if app.lower() == src_model.IDLE_ID:               # the idle screen is a display choice, not a media session
+            return {"ok": False, "action": action, "app": src_model.IDLE_ID, "error": "the idle screen is selected: nothing to control"}
         try:
             result = self._call(self._control(action, position_ms, app), CONTROL_TIMEOUT_S)
         except Exception as exc:
@@ -217,6 +219,9 @@ class MediaMonitor:
         action: "get" | "volume-up" | "volume-down" | "volume-set" (level 0..100).
         `app` is the app id the display says it is showing: the volume goes to that app's audio session, and is refused if
         that app no longer has a media session (the screen is about to change), so it can never hit a different app."""
+        if app.lower() == src_model.IDLE_ID:               # no volume key reaches any app while the idle screen is shown
+            return {"ok": False, "action": action, "app": src_model.IDLE_ID, "error": "the idle screen is selected: nothing to control",
+                    "volume": None}
         try:
             app = self._call(self._resolve_app(app), CONTROL_TIMEOUT_S)
         except Exception as exc:
@@ -320,30 +325,38 @@ class MediaMonitor:
     async def _switch_source(self, direction: int, shown_app: str) -> dict[str, Any]:
         mgr = await self._get_manager()
         srcs, objs, cur_app = await self._read_sources(mgr)
-        shown = src_model._find(objs.keys(), shown_app) if shown_app else None
+        idle_id = src_model.IDLE_ID
+        if shown_app and shown_app.lower() == idle_id:   # the display says it shows the idle screen (selected, or shown automatically)
+            shown = idle_id
+        else:
+            shown = src_model._find(objs.keys(), shown_app) if shown_app else None
         if shown is None:                                # the display is out of date (its session is gone): relative to what we show
             selected = await self._select()
-            shown = selected.app if selected else ""
-        ring = src_model.ring(srcs, shown)
-        target = src_model.step(srcs, shown, direction)
+            shown = idle_id if self.sel.idle_selected else (selected.app if selected else "")
+        ring = src_model.ring(srcs, shown, idle=True)
+        target = src_model.step(srcs, shown, direction, idle=True)
         if target is None:
             return {"ok": True, "action": "source", "changed": False, "count": len(ring), "app": shown,
                     "source": src_model.friendly_name(shown) if shown else "", "mode": self.sel.mode.value}
         mode = self.sel.select(target, srcs, cur_app, time.monotonic())
-        idx, count = src_model.position(srcs, target)
+        idx, count = src_model.position(srcs, target, idle=True)
         log.info("source -> %s (%d of %d) by swipe %s from %s; mode %s", target, idx, count, "up" if direction >= 0 else "down", shown,
                  mode.value)
         return {"ok": True, "action": "source", "changed": True, "app": target, "source": src_model.friendly_name(target),
-                "index": idx, "count": count, "mode": mode.value}
+                "index": idx, "count": count, "mode": mode.value, "idle": target == idle_id}
 
     async def _list_sources(self) -> dict[str, Any]:
         mgr = await self._get_manager()
         selected = await self._select()
-        shown = selected.app if selected else ""
+        shown = src_model.IDLE_ID if self.sel.idle_selected else (selected.app if selected else "")
         srcs = selected.sources if selected else (await self._read_sources(mgr))[0]
         by_app = {s.app: s for s in srcs}
         rows = []
-        for app in src_model.ring(srcs, shown):
+        for app in src_model.ring(srcs, shown, idle=True):
+            if app == src_model.IDLE_ID:                       # the synthetic item: not a Windows session
+                rows.append({"app": app, "name": src_model.IDLE_NAME, "state": "idle", "title": "", "artist": "", "displayed": app == shown,
+                             "synthetic": True})
+                continue
             s = by_app.get(app)
             rows.append({"app": app, "name": src_model.friendly_name(app), "state": s.state if s else "", "title": s.title if s else "",
                          "artist": s.artist if s else "", "displayed": app == shown})
@@ -380,7 +393,8 @@ class MediaMonitor:
             await self._update_artwork(track_key, props)
 
             ctl = info.controls
-            index, count = src_model.position(selected.sources, app)
+            idle_sel = self.sel.idle_selected                # the idle screen was chosen: sessions below it keep their content, the display shows idle
+            index, count = src_model.position(selected.sources, src_model.IDLE_ID if idle_sel else app, idle=True)
             snap = {
                 "ok": True,
                 "version": 1,
@@ -389,7 +403,8 @@ class MediaMonitor:
                 "source": src_model.friendly_name(app),     # short name for the on-screen label
                 "sources": count,                           # how many sessions a vertical swipe can switch between
                 "source_index": index,
-                "mode": self._mode_for(app),               # "manual" while this session is a temporary manual selection, else "auto"
+                "mode": "manual" if idle_sel else self._mode_for(app),   # "manual" while this session (or the idle screen) is a temporary selection
+                "idle_selected": idle_sel,                  # true: the user swiped onto the idle screen (a display choice only; media keeps playing)
                 "state": state,
                 "playing": status == PlaybackStatus.PLAYING,
                 "title": title,
@@ -425,7 +440,8 @@ class MediaMonitor:
             self._art_img, self._art_id, self._art_cache = None, "", {}
         self._track_key = ""
         return {"ok": True, "version": 1, "has_session": False, "state": "none", "playing": False,
-                "source": "", "sources": 0, "source_index": 0, "mode": self.sel.mode.value,
+                "source": "", "sources": 1, "source_index": 1 if self.sel.idle_selected else 0, "mode": self.sel.mode.value,
+                "idle_selected": self.sel.idle_selected,
                 "title": "", "artist": "", "album": "", "position_ms": 0, "duration_ms": 0,
                 "track_id": "", "art_id": "", "can_play": False, "can_pause": False, "can_next": False,
                 "can_prev": False, "can_seek": False, "spotify": False, "shuffle": False, "repeat": 0,

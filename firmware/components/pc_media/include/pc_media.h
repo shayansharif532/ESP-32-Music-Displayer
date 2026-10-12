@@ -40,6 +40,9 @@ typedef struct {
     bool     any_playing;
     uint32_t idle_v;
     int64_t  clock_ms;
+    /* The user swiped onto the "Idle Screen" item of the source ring (a display choice only: media keeps playing). The companion
+     * ends it by itself when a session starts playing. `sources` / `source_index` count that item too. */
+    bool     idle_selected;
 } pc_media_state_t;
 
 typedef enum {
@@ -59,8 +62,10 @@ typedef enum {
     PC_MEDIA_CMD_VOLUME_DOWN,
     PC_MEDIA_CMD_SHUFFLE,       /* Spotify only: toggle shuffle / cycle repeat (off -> playlist -> track -> off) of the displayed session */
     PC_MEDIA_CMD_REPEAT,
-    PC_MEDIA_CMD_SOURCE_NEXT,   /* switch the display (and everything it controls) to the next / previous media session on the PC */
+    PC_MEDIA_CMD_SOURCE_NEXT,   /* switch the display (and everything it controls) to the next / previous source on the PC: a media session,
+                                 * or the synthetic "Idle Screen" item. arg = 1: the display is showing the idle screen right now */
     PC_MEDIA_CMD_SOURCE_PREV,
+    PC_MEDIA_CMD_SOURCE_AUTO,   /* leave a manual choice (e.g. the idle screen): back to following what plays */
 } pc_media_cmd_t;
 
 typedef struct {

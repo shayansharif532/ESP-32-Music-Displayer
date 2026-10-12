@@ -344,6 +344,7 @@ static void parse_state(const cJSON *root, pc_media_state_t *ns)
     ns->can_repeat = ns->spotify && jbool(root, "can_repeat");
     ns->any_playing = cJSON_GetObjectItemCaseSensitive(root, "any_playing") ? jbool(root, "any_playing") : ns->playing;
     ns->idle_v = jnum(root, "idle_v");
+    ns->idle_selected = jbool(root, "idle_selected");
     ns->clock_ms = jint64(root, "clock_ms");
 }
 
@@ -458,7 +459,7 @@ static void apply_transport_answer(const char *path)
     const bool ok = jbool(j, "ok");
     pc_media_state_t ns;
     parse_state(now, &ns);
-    ESP_LOGI(TAG, "command %s -> %s, shuffle %d repeat %u", path, ok ? "ok" : "refused", (int)ns.shuffle, (unsigned)ns.repeat);
+    ESP_LOGI(TAG, "command %s -> %s%s", path, ok ? "ok" : "refused", ns.idle_selected ? " (idle screen selected)" : "");
     cJSON_Delete(j);
     apply_state(&ns);
 }
@@ -515,14 +516,19 @@ static void do_command(const cmd_msg_t *m)
         break;
     case PC_MEDIA_CMD_SOURCE_NEXT:
     case PC_MEDIA_CMD_SOURCE_PREV:
-        snprintf(path, sizeof path, "/control/source-%s?from=%s", m->cmd == PC_MEDIA_CMD_SOURCE_NEXT ? "next" : "prev", app);
+        /* the display names what it shows: the idle screen has the identity "idle" (it is not a Windows session) */
+        snprintf(path, sizeof path, "/control/source-%s?from=%s", m->cmd == PC_MEDIA_CMD_SOURCE_NEXT ? "next" : "prev",
+                 m->arg == 1 ? "idle" : app);
+        break;
+    case PC_MEDIA_CMD_SOURCE_AUTO:
+        snprintf(path, sizeof path, "/control/source-auto");
         break;
     default:
         return;
     }
     const bool is_volume = (m->cmd == PC_MEDIA_CMD_VOLUME_UP || m->cmd == PC_MEDIA_CMD_VOLUME_DOWN);
     const bool is_source = (m->cmd == PC_MEDIA_CMD_SOURCE_NEXT || m->cmd == PC_MEDIA_CMD_SOURCE_PREV);
-    const bool is_transport = (m->cmd == PC_MEDIA_CMD_SHUFFLE || m->cmd == PC_MEDIA_CMD_REPEAT);
+    const bool is_transport = (m->cmd == PC_MEDIA_CMD_SHUFFLE || m->cmd == PC_MEDIA_CMD_REPEAT || m->cmd == PC_MEDIA_CMD_SOURCE_AUTO);   /* answer carries a fresh "now" */
     esp_err_t err = pc_http_request(host, port, path, true, HTTP_TIMEOUT_MS, &s.resp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "command %s failed: %s", path, esp_err_to_name(err));
