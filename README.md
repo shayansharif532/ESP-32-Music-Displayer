@@ -15,13 +15,26 @@ obsolete; its code is parked in [`legacy/`](legacy/README.md).)
 | **Framework** | **ESP-IDF 5.5.5** (C / FreeRTOS) — not Arduino, see [docs/DECISIONS.md](docs/DECISIONS.md) |
 | **UI** | **LVGL 9.5.0** via `espressif/esp_lvgl_port` 2.9.0 |
 | **Board support** | Waveshare BSP **`waveshare/esp32_s3_touch_lcd_4b` 2.0.0** (with `esp_lcd_st7701` 2.0.3, `esp_lcd_touch_gt911` 1.2.1) — every version is pinned in [`firmware/dependencies.lock`](firmware/dependencies.lock) |
-| **Windows companion** | Python 3.12 + `winrt-*` (Windows.Media.Control) + Pillow + psutil — [`companion/`](companion/) (single `.exe` for the recipient: Milestone 12) |
+| **Windows companion** | Python 3.12 + `winrt-*` (Windows.Media.Control) + Pillow + psutil + pycaw/comtypes (per-app volume) — [`companion/`](companion/) (single `.exe` for the recipient: Milestone 12) |
 | **Dev host** | Windows 10/11, PowerShell 5.1 (the tested path). Linux/macOS: see the note below (untested, firmware only) |
 | **Repository** | <https://github.com/shayansharif532/ESP-32-Spotify> (private) |
 
 > **Status (2026-10-12):** the architecture was changed to the Windows companion (ADR-003) and the **MVP works**: Spotify desktop and YouTube/other
 > media in Chrome show real artwork, title, artist/channel and progress on the display, and play/pause/next/previous work from the touchscreen
 > (24 real touches, no reset). Evidence and the few open points: [docs/milestones/MVP-media-companion.md](docs/milestones/MVP-media-companion.md).
+
+## Using the display
+
+| Control | What it does |
+|---|---|
+| tap play / previous / next | transport controls of the session being shown |
+| **swipe right / swipe left** on the screen | **next / previous track** (needs >= 72 px of mostly horizontal travel; does nothing if the app has no next / previous) |
+| drag on the thin progress line | seek |
+| tap the cover | full-screen cover (tap again to return) |
+| **upper side button (PWR)** / **lower side button (BOOT)** | **volume up / down of the app being shown** (Windows per-app volume, not the PC's master volume), 5 % per press, hold to repeat (max 3 s); a "Volume 65%" pill shows for a second |
+
+Square covers are shown large and square; widescreen thumbnails (YouTube) as a landscape card. Do not hold the PWR button for more than ~4 seconds: the power chip turns the board off by itself.
+Chrome / Edge change the volume of the whole browser (all tabs share one audio session); Spotify changes only Spotify.
 
 ## Start here (new computer or new Claude Code session)
 
@@ -36,13 +49,13 @@ obsolete; its code is parked in [`legacy/`](legacy/README.md).)
 |---|---|
 | Orientation / rules for Claude Code sessions | [`CLAUDE.md`](CLAUDE.md) |
 | **Architecture + companion HTTP protocol** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md) |
+| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md) |
 | Hardware facts, verified pin map, sources | [`docs/HARDWARE.md`](docs/HARDWARE.md) |
 | Decisions: framework (ADR-001), companion architecture (ADR-003), obsolete Spotify rules (ADR-002) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | **Windows companion app** | [`companion/`](companion/) |
 | Obsolete Spotify client (kept, not built) | [`legacy/`](legacy/README.md) |
 | Firmware (ESP-IDF project) and its provenance | [`firmware/`](firmware/), [`firmware/NOTICE.md`](firmware/NOTICE.md) |
-| Helper scripts | [`tools/`](tools/): `idf.ps1`, `find-board.ps1`, `serial_capture.py`, `set-dev-secrets.ps1`, `analyze_flash_dump.py` |
+| Helper scripts | [`tools/`](tools/): `idf.ps1`, `find-board.ps1`, `serial_capture.py`, `set-dev-secrets.ps1`, `analyze_flash_dump.py`, dev-only `screenshot.py` (real display -> PNG, scripted swipes), `contact_sheet.py`, `soak_gestures.py` |
 | Factory-backup manifest (hashes, layout, restore steps) | [`backup/factory/MANIFEST.md`](backup/factory/MANIFEST.md) |
 | Waveshare reference downloads (git-ignored, re-fetchable) | `docs/waveshare/` |
 
@@ -161,7 +174,7 @@ templates may be committed. The companion's LAN API is unauthenticated plain HTT
 ## First-run setup / recovery / reset
 
 *(designed and documented at Milestone 11; planned flow: device opens a temporary Wi-Fi access point -> phone joins -> captive page picks the
-Wi-Fi network and stores it in NVS -> the display finds the PC companion by itself -> Now Playing; holding BOOT at power-up wipes the
+Wi-Fi network and stores it in NVS -> the display finds the PC companion by itself -> Now Playing; a long press of BOOT *while the app is running* (not at power-up: that is the ROM download-mode gesture, and BOOT is the volume-down key during normal use) wipes the
 stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milestone 13.)*
 
 ## Milestones (plan revised 2026-10-12 for the companion architecture)
@@ -178,6 +191,7 @@ stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milest
 | 7 | Play / pause / previous / next (+ seek) through the media session | **done** for play/pause/next/previous (real taps, Spotify + Chrome); seek wired, not yet seen in a log |
 | — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | **passed by log evidence** (owner's visual confirmation of the screen still to be given) |
 | 8 | **Main player visual redesign** (big frameless cover, artwork-driven blurred background, clean foreground) | **done** - see [M8 doc](docs/milestones/M8-player-redesign.md) |
+| 8b | **Refinement pass**: widescreen art as a landscape card, Spotify logo removed, swipe gestures (right = next, left = previous), per-app Windows volume, side buttons = volume up / down | **done** - see [M8b doc](docs/milestones/M8b-art-layout-gestures-volume.md) |
 | 9 | Cyberpunk idle screen (nothing playing) | next |
 | 10 | Full-screen album-art polish | |
 | 11 | First-run Wi-Fi setup | |

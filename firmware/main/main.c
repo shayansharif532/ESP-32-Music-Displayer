@@ -26,10 +26,13 @@
 #include "dev_tools.h"
 #include "health.h"
 #include "pc_media.h"
+#include "side_keys.h"
 #include "ui.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "app";
+
+#define VOLUME_STEP_PERCENT     5
 
 /* ---- UI taps -> companion commands (runs on the LVGL task: only queues, never blocks) ----------------- */
 
@@ -42,6 +45,25 @@ static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
     case UI_CMD_NEXT:       pc_media_command(PC_MEDIA_CMD_NEXT, 0); break;
     case UI_CMD_SEEK:       pc_media_command(PC_MEDIA_CMD_SEEK, arg); break;
     }
+}
+
+/* ---- side buttons -> per-app volume (called from the side_keys task; only queues a command) ---------------- */
+
+void app_side_key(side_key_t key)
+{
+    pc_media_command(key == SIDE_KEY_UP ? PC_MEDIA_CMD_VOLUME_UP : PC_MEDIA_CMD_VOLUME_DOWN, VOLUME_STEP_PERCENT);
+}
+
+static void on_side_key(side_key_t key, void *ctx)
+{
+    (void)ctx;
+    app_side_key(key);
+}
+
+static void on_volume(int percent, bool muted, void *ctx)
+{
+    (void)ctx;
+    ui_show_volume(percent, muted);
 }
 
 /* ---- companion events -> UI (called from the pc_media poll task) ----------------------------------------- */
@@ -240,10 +262,11 @@ void app_main(void)
     const pc_media_config_t pc = {
         .static_host = DEV_COMPANION_HOST,
         .port = 0,
-        .art_size = UI_ART_SIZE,
-        .cover = { UI_ART_X, UI_ART_Y, UI_ART_SIZE },
+        .art_max_w = UI_ART_MAX_W,
+        .art_max_h = UI_ART_SIZE,
+        .cover_area = ui_art_area,
         .cbs = {
-            .on_state = on_state, .on_art = on_art, .on_status = on_status,
+            .on_state = on_state, .on_art = on_art, .on_status = on_status, .on_volume = on_volume,
 #ifdef APP_DEV_TOOLS
             .on_debug = on_debug,
 #endif
@@ -251,6 +274,9 @@ void app_main(void)
         },
     };
     ESP_ERROR_CHECK(pc_media_start(&pc));
+    if (side_keys_start(on_side_key, NULL) != ESP_OK) {            /* the two side buttons = volume up / down */
+        ESP_LOGW(TAG, "side keys not available");
+    }
 
 #ifdef APP_WIFI_SELFTEST
     xTaskCreatePinnedToCore(wifi_selftest_task, "wifi_selftest", 4096, NULL, 2, NULL, 0);

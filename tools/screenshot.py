@@ -7,6 +7,7 @@ screen to RAM and sends it over the USB serial console as base64 lines, which th
 
     tools\\venv\\Scripts\\python.exe tools\\screenshot.py --out logs\\shot.png
     ... --tap next          also press the on-screen control first (play|next|prev|art), then capture
+    ... --do swipe_right    scripted virtual-finger gesture / simulated side-button press first (see --help), then capture
     ... --no-trigger        only listen (something else asked for the screenshot)
     ... --from-log FILE     assemble the picture from a saved serial log
 """
@@ -22,6 +23,10 @@ import zlib
 from PIL import Image
 
 COMPANION = "http://127.0.0.1:8765"
+# Dev-firmware actions (see firmware/main/dev_tools.c); every one of them can reach a media control, so they are all guarded.
+DEV_ACTIONS = ["swipe_right", "swipe_left", "swipe_up", "swipe_diag", "swipe_bar", "swipe_text", "touch_cover", "touch_play",
+               "key_up", "key_down", "keyhold_up", "keyhold_down", "swipe_right_shot", "swipe_left_shot", "key_up_shot", "key_down_shot",
+               "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"]
 CHUNK = 192
 NL = bytes([10])
 
@@ -102,6 +107,9 @@ def main() -> int:
     ap.add_argument("--out", default="screenshot.png")
     ap.add_argument("--companion", default=COMPANION, help="companion base URL used to trigger the capture")
     ap.add_argument("--tap", choices=["play", "next", "prev", "art"], help="press this control first")
+    ap.add_argument("--do", choices=DEV_ACTIONS,
+                    help="perform a scripted touch / key action on the board first (a virtual finger through the real LVGL input path, "
+                         "or a simulated side-button press), then capture. Refused unless the active session is the fake test session")
     ap.add_argument("--no-trigger", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="allow --tap play/next/prev on a REAL media session (default: only on the fake test session, python.exe)")
@@ -130,6 +138,17 @@ def main() -> int:
             post_debug(args.companion, f"tap_{args.tap}")
             time.sleep(3.0)                                   # let the new track's artwork load first
             ser.reset_input_buffer()
+        if args.do:
+            if not args.force and media_app(args.companion) != "python.exe":
+                print("refusing: this action could send a real command (next / previous / seek / play / volume) to whatever the "
+                      "PC is playing. It only runs against the fake test session. Use --force if you really want that.", file=sys.stderr)
+                return 4
+            post_debug(args.companion, args.do)
+            if args.do.endswith("_shot"):                     # the board photographs itself while the effect is on screen
+                args.no_trigger = True
+            else:
+                time.sleep(3.5)                               # the gesture takes under a second; then the new track's artwork loads
+                ser.reset_input_buffer()
         rc = 2
         for attempt in range(3):                              # a dropped serial byte fails the CRC: just ask again
             if not args.no_trigger:

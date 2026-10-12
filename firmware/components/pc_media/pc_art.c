@@ -2,8 +2,9 @@
  * Album art: JPEG -> RGB565 for LVGL, plus the artwork-driven screen background.
  *
  * Two fixed PSRAM buffer sets (art + background) are allocated once and used alternately, so the set on screen is never
- * overwritten and there is no allocation churn / heap fragmentation. The companion already sends a square baseline JPEG;
- * anything larger is shrunk by the decoder (1/2, 1/4, 1/8) until it fits.
+ * overwritten and there is no allocation churn / heap fragmentation. The companion sends a baseline JPEG that already has the
+ * size the cover is drawn at (a square, or a landscape card up to ART_MAX_W x ART_MAX_H); anything larger is shrunk by the
+ * decoder (1/2, 1/4, 1/8) until it fits.
  *
  * Background ("blurred cover"): the cover is averaged down to a 40x40 colour grid, saturated a little, smoothed, then
  * interpolated up to the full 480x480 with smooth-step weights (no blocky/diamond artefacts), darkened with a vertical
@@ -21,9 +22,10 @@
 
 static const char *TAG = "pc_art";
 
-#define ART_MAX_DIM     320
-#define ART_BUF_BYTES   (ART_MAX_DIM * ART_MAX_DIM * 2)          /* RGB565 result */
-#define ART_RGB_BYTES   (ART_MAX_DIM * ART_MAX_DIM * 3)          /* RGB888 decode scratch (dithered down to RGB565) */
+#define ART_MAX_W       432                                      /* largest cover the companion is asked for (landscape card) */
+#define ART_MAX_H       320
+#define ART_BUF_BYTES   (ART_MAX_W * ART_MAX_H * 2)              /* RGB565 result */
+#define ART_RGB_BYTES   (ART_MAX_W * ART_MAX_H * 3)              /* RGB888 decode scratch (dithered down to RGB565) */
 
 #define BG_W            480
 #define BG_H            480
@@ -43,7 +45,7 @@ typedef struct {                    /* scratch for make_background(), lives in P
     uint32_t cnt[GRID][GRID];
     float cell[GRID][GRID][3];
     float tmp[GRID][GRID][3];
-    uint8_t gxmap[ART_MAX_DIM];
+    uint8_t gxmap[ART_MAX_W];
     int16_t ix0[BG_W], ix1[BG_W];
     uint16_t wx[BG_W];
 } bgwork_t;
@@ -58,14 +60,12 @@ static struct {
     int next;                       /* slot to decode into */
     bool inited;
     struct { int x, y, w, h; } rect;        /* where the UI draws the cover (for the baked shadow) */
+    pc_cover_area_fn area_fn;
 } s = { .rect = { 84, 18, 312, 312 } };
 
-void pc_art_set_cover_rect(int x, int y, int w, int h)
+void pc_art_set_cover_area_fn(pc_cover_area_fn fn)
 {
-    s.rect.x = x;
-    s.rect.y = y;
-    s.rect.w = w;
-    s.rect.h = h;
+    s.area_fn = fn;
 }
 
 static esp_err_t ensure_init(void)
@@ -279,7 +279,7 @@ esp_err_t pc_art_decode(const uint8_t *jpeg, size_t len, const lv_image_dsc_t **
             ESP_LOGW(TAG, "not a decodable JPEG (progressive or corrupt?)");
             return ESP_FAIL;
         }
-        if (info.width <= ART_MAX_DIM && info.height <= ART_MAX_DIM && info.output_len <= ART_RGB_BYTES) {
+        if (info.width <= ART_MAX_W && info.height <= ART_MAX_H && info.output_len <= ART_RGB_BYTES) {
             break;
         }
     }
@@ -294,6 +294,13 @@ esp_err_t pc_art_decode(const uint8_t *jpeg, size_t len, const lv_image_dsc_t **
         return err;
     }
 
+    if (s.area_fn) {                                    /* the UI decides where a cover of this shape is drawn */
+        lv_area_t a = s.area_fn((int)info.width, (int)info.height);
+        s.rect.x = a.x1;
+        s.rect.y = a.y1;
+        s.rect.w = a.x2 - a.x1 + 1;
+        s.rect.h = a.y2 - a.y1 + 1;
+    }
     rgb888_to_565_dithered(s.rgb, info.width, info.height, (uint16_t *)s.art_px[s.next]);
     make_background(s.rgb, info.width, info.height, s.bg_px[s.next]);
 

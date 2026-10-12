@@ -2,6 +2,8 @@
 without playing any sound, so the companion and the ESP32 can be tested end to end without Spotify / a browser.
 
     companion\\.venv\\Scripts\\python.exe companion\\tools\\fake_media_session.py          (Ctrl+C to stop)
+        --art-dir DIR      use the images in DIR as the covers of the tracks (see make_test_covers.py)
+        --silent-audio     also open a silent audio stream, so per-app volume can be tested (the session is python.exe)
 
 Needs:  pip install winrt-Windows.Media.Playback winrt-Windows.Media.Core
 """
@@ -147,9 +149,30 @@ class Fake:
         self.smtc.playback_status = MediaPlaybackStatus.PLAYING if self.playing else MediaPlaybackStatus.PAUSED
 
 
+def start_silent_audio() -> None:
+    """Loops a silent WAV so this process owns a real (but inaudible) Windows audio session: lets the per-app volume
+    control be tested end to end without touching Spotify / the browser."""
+    import os
+    import tempfile
+    import wave
+    import winsound
+    path = os.path.join(tempfile.gettempdir(), "desk-media-silence.wav")       # winsound cannot loop a WAV from memory
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 8000)
+    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_LOOP | winsound.SND_ASYNC)
+    print("silent audio stream started (python.exe now has an audio session)", flush=True)
+
+
 def main() -> None:
-    if len(sys.argv) > 2 and sys.argv[1] == "--art-dir":
-        load_tracks_from_dir(sys.argv[2])
+    args = sys.argv[1:]
+    if "--silent-audio" in args:
+        args.remove("--silent-audio")
+        start_silent_audio()
+    if len(args) > 1 and args[0] == "--art-dir":
+        load_tracks_from_dir(args[1])
     fake = Fake()
     print("fake media session is up (silent). Ctrl+C to stop.", flush=True)
     try:

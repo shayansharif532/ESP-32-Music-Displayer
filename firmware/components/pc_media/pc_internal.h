@@ -33,5 +33,6 @@ void pc_http_drop(void);        /* forget the kept-alive connection (after an er
 
 /* Decodes a JPEG into one of two fixed PSRAM RGB565 buffers and builds the matching blurred full-screen background. */
 esp_err_t pc_art_decode(const uint8_t *jpeg, size_t len, const lv_image_dsc_t **out_art, const lv_image_dsc_t **out_bg);
-/* Tell the background generator where the UI draws the cover (it bakes a soft shadow behind it). */
-void pc_art_set_cover_rect(int x, int y, int w, int h);
+/* Where the UI draws a cover of the given pixel size (the background generator bakes a soft shadow behind that area). */
+typedef lv_area_t (*pc_cover_area_fn)(int art_w, int art_h);
+void pc_art_set_cover_area_fn(pc_cover_area_fn fn);

@@ -24,7 +24,7 @@ Everything below was cross-checked from independent sources. Evidence tags:
 | PSRAM | 8 MB **octal**, vendor AP_3v3, 85 °C grade; passes the SPI SRAM memory test at boot. Waveshare's official example runs it at 80 MHz (`CONFIG_SPIRAM_MODE_OCT` + `CONFIG_SPIRAM_SPEED_80M`) |
 | Security | secure boot OFF, flash encryption OFF, JTAG/USB-JTAG/download mode all enabled, eFuses untouched |
 | USB | two USB-C ports. **Native USB** (ESP32-S3 USB-Serial/JTAG, `VID_303A PID_1001`, enumerates as `COM5`) is the one in use. The second port is a USB-to-UART bridge (UART0). Native port console only streams while the host asserts **DTR** — `idf.py monitor` does this; a raw serial tool must too |
-| Buttons | **BOOT** (GPIO0) and **PWR** (AXP2101 PWRKEY). There is **no RESET button**. |
+| Buttons | **BOOT** (GPIO0) and **PWR** (AXP2101 PWRON). There is **no RESET button**. Both are the two "side buttons" on one board edge; this project uses them as volume down (BOOT, lower) / volume up (PWR, upper) - see "Side buttons" below. |
 
 ## Peripherals
 
@@ -45,10 +45,23 @@ Shared I2C bus: **SDA = GPIO47, SCL = GPIO48** (400 kHz in the BSP, internal pul
 
 | EXIO | Signal | | EXIO | Signal |
 |---|---|---|---|---|
-| 0 | LCD chip-select (3-wire SPI) | | 4 | not documented |
+| 0 | LCD chip-select (3-wire SPI) | | 4 | gate of the BSS138 in the KEYS block (see "Side buttons"); do not drive |
 | 1 | LCD serial data (3-wire SPI) | | 5 | GT911 reset |
 | 2 | LCD serial clock (3-wire SPI) | | 6 | GT911 interrupt |
 | 3 | Audio power-amp enable | | 7 | LCD reset |
+
+## Side buttons (PWR and BOOT) [schematic, extracted 2026-10-12]
+
+Source: the vector text of page 1 of the official schematic (`KEYS` block) and the PCB layout on page 2 (Key3 "PWRKEY" above Key1 "BOOT" on the left board edge, display FPC at
+the bottom), plus Waveshare's wiki photo of the back of the board. The BSP declares `BSP_CAPS_BUTTONS 0` and defines no button pins.
+
+| Key | Net | Notes |
+|---|---|---|
+| **Key1 "BOOT"** | `IO0` = **GPIO0**, other side GND; 10 k pull-up, 100 nF | strapping pin: held while the chip resets / powers up -> ROM download mode (hardware, unaffected by the app). A normal input while the app runs. |
+| **Key3 "PWR"** | `PWRON` = **AXP2101 PWRON pin**, other side GND; 10 k pull-up | **not wired to an ESP32 pin.** The AXP2101 `IRQ` pin is not routed to the ESP32 either (net `AXP_IRQ` appears once). Read by polling the PMIC: I2C 0x34, `INTSTS2` (0x49) bit0 PWRON rising edge, bit1 falling edge, bit2 long press, bit3 short press (enable bits in `INTEN2` 0x41; chip id reg 0x03 = 0x4A). Bit map confirmed in Waveshare's bundled XPowersLib (`XPowersParams.hpp`). The PMIC powers the board off by itself after a long press (4-10 s, its own configuration): never hold PWR longer than ~4 s. |
+| `EXIO4` (TCA9554) | gate of a BSS138 (T1) in the KEYS block | undocumented; the firmware never drives it. |
+
+The firmware (`components/side_keys`) uses PWR = volume up, BOOT = volume down.
 
 ## RGB panel [audit/bsp/ard — all three agree]
 

@@ -48,7 +48,7 @@ Exact board:
 - Native USB / USB JTAG Serial
 - Known Windows port during development: **COM5**
 - USB VID:PID observed: **303A:1001**
-- Physical buttons: **BOOT** and **PWR**
+- Physical buttons: **BOOT** (GPIO0) and **PWR** (AXP2101 PWRON, read by polling the PMIC over I2C) - the two side buttons are the **volume keys** (PWR = up, BOOT = down; see Milestone 8b and `docs/HARDWARE.md`)
 - Two USB-C ports
 - Current physical unit includes the white front shell/bezel; rear PCB remains exposed.
 
@@ -202,7 +202,7 @@ Stable Wi-Fi with automatic reconnect (exponential back-off). Credentials: tempo
 
 ### Milestone 6 - Album artwork
 
-The companion normalises any thumbnail to a square 300x300 **baseline** JPEG (near-square art is cropped, wide art letterboxed so nothing is cut off); the ESP32 downloads it only when `art_id` changes and decodes it into two fixed PSRAM buffers (no allocation churn). Album art should be the visual focus of the product.
+The companion cleans any thumbnail (removes the Spotify logo composite and black letterbox bars) and renders a **baseline** JPEG at exactly the size the display draws it: a square cover, or - for 16:9 video thumbnails - a landscape card, aspect ratio always kept (`GET /artwork?size=312&maxw=432`); the ESP32 downloads it only when `art_id` changes and decodes it into two fixed PSRAM buffers (no allocation churn). Album art should be the visual focus of the product.
 
 ### Milestone 7 - Playback controls
 
@@ -230,6 +230,21 @@ Built (`firmware/components/ui/ui.c`, `firmware/components/pc_media/pc_art.c`):
 
 Rules for later work on this screen: keep the foreground clean; do not add LVGL shadows/blur/overlays over the full screen (they redraw every progress tick);
 verify visually with `tools/screenshot.py` (see Testing Philosophy) instead of guessing.
+
+### Milestone 8b - Refinement pass (DONE 2026-10-12; evidence: `docs/milestones/M8b-art-layout-gestures-volume.md`)
+
+After the owner reviewed M8 on the real display:
+
+- **Widescreen art** (YouTube) is a landscape card (432 px wide for 16:9, rounded, never stretched) instead of a letterboxed square; square covers are unchanged; the title / artist follow the card.
+  Chromium hands Windows only ~150 px thumbnails, so cards are soft - a Windows limit.
+- **The Spotify logo is gone**: Windows gives a 300x300 RGBA composite (opaque 234x234 cover, transparent gap, logo). `artwork.split_composite` splits it structurally (alpha bands), never by a fixed crop; anything
+  ambiguous is left untouched. Black letterbox bars are trimmed.
+- **Swipe gestures**: right = next track, left = previous (>= 72 px mostly horizontal, < 1 s; consumed so nothing is clicked; never from the progress bar; no-op when the app has no next / previous).
+- **Per-app volume** via Core Audio sessions (`companion/desk_media_companion/volume.py`): `GET /volume`, `POST /control/volume-up|volume-down[?step=5&app=...]`. Never the master volume (verified).
+  Browsers: whole-browser volume (shared audio process); Firefox not matchable.
+- **Side buttons = volume**: PWR (upper) = up, BOOT (lower) = down (`firmware/components/side_keys`), 5 % steps, hold-repeat capped at 3 s, transient "Volume 65%" pill.
+  **Do not hold PWR > ~4 s (the PMIC powers the board off). BOOT at power-up is the ROM download-mode gesture, so Milestone 11's "hold BOOT at power-up to wipe Wi-Fi" must become a long press while running.**
+- Rules learned: the display must name the app it shows in volume requests; never let a held key flood the command queue (poll is time-scheduled); overlays must be children of the screen (the screenshot tool does not render `lv_layer_top`).
 
 ### Milestone 9 — Cyberpunk Idle Screen
 
@@ -270,7 +285,7 @@ Preferred flow:
 7. Device finds the PC companion (already automatic) and returns to normal Now Playing mode.
 8. Future boots reconnect automatically.
 
-Provide an easy reset/reconfiguration path (e.g. hold BOOT at power-up to wipe the stored Wi-Fi).
+Provide an easy reset/reconfiguration path. NOT "hold BOOT at power-up" (that is the ROM download-mode gesture, and BOOT is the volume-down key while running): use a long press of BOOT while the app is running, or a button on the setup / status page.
 
 ### Milestone 12 - Companion installer
 
@@ -362,13 +377,16 @@ Actual structure (current):
 ```text
 companion/                      Windows companion (Python)
   desk_media_companion/         media.py (GSMTC), server.py (HTTP API), discovery.py (UDP beacon), autostart.py, __main__.py
-  tools/fake_media_session.py   silent test media session
+  tools/fake_media_session.py   silent test media session (--art-dir, --silent-audio for volume tests)
+  tools/dump_sessions.py        read-only dump of every media session + raw thumbnail (how the Spotify composite was found)
+  desk_media_companion/artwork.py  thumbnail clean-up + aspect-preserving rendering;  volume.py  per-app Core Audio volume
 firmware/
   main/                         main.c (glue), app_config.h, health.c, demo_player.c (UI-only demo)
   components/
     ui/                         LVGL Now Playing screen (later: screens/{idle,setup})
     wifi_mgr/                   Wi-Fi STA + reconnect + SNTP
     pc_media/                   companion discovery + polling + artwork + commands
+    side_keys/                  the two side buttons (BOOT GPIO0, PWR via AXP2101 over I2C) as volume down / up
 legacy/                         obsolete Spotify client (not built)
 ```
 
@@ -540,7 +558,7 @@ Physical intervention may be required for BOOT/PWR operations. Tell the user exa
 
 ## Testing Philosophy
 
-**Seeing the real screen:** build with `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 build`, run the companion with `--dev-tools`, then `tools\venv\Scripts\python.exe tools\screenshot.py --out logs\shot.png` - the board renders its LVGL screen to RAM and sends it over USB serial; the script turns it into a PNG (CRC-checked) that can be viewed. Use this to check layout, colours and artwork instead of guessing. `--tap art` presses the cover (UI only). `--tap play|next|prev` is refused unless the active session is the silent fake test session (`companion/tools/fake_media_session.py`), because it would press the real controls of whatever the owner is playing. Never ship a build with `APP_DEV_TOOLS`.
+**Seeing the real screen:** (since M8b also scripted input: `--do swipe_right|swipe_left|swipe_up|swipe_diag|swipe_bar|swipe_text|touch_cover|touch_play|key_up|key_down|keyhold_*|<action>_shot` drives a virtual finger through the real LVGL input path or simulates a side-button press; all of these are refused unless the active session is the fake test session. `companion --prefer-app python.exe` pins the display to the fake session for such tests - but NEVER pin or send commands while the owner is testing by hand: their key presses and swipes would hit the wrong app.) build with `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 build`, run the companion with `--dev-tools`, then `tools\venv\Scripts\python.exe tools\screenshot.py --out logs\shot.png` - the board renders its LVGL screen to RAM and sends it over USB serial; the script turns it into a PNG (CRC-checked) that can be viewed. Use this to check layout, colours and artwork instead of guessing. `--tap art` presses the cover (UI only). `--tap play|next|prev` is refused unless the active session is the silent fake test session (`companion/tools/fake_media_session.py`), because it would press the real controls of whatever the owner is playing. Never ship a build with `APP_DEV_TOOLS`.
 
 For every milestone:
 
@@ -619,12 +637,13 @@ They may be future enhancements, but they must not delay the core music-display 
 
 ## Immediate Next Task
 
-State on 2026-10-12: the MVP works and the Milestone 8 player redesign is done (see `docs/milestones/MVP-media-companion.md`, `docs/milestones/M8-player-redesign.md`). Next, in this order:
+State on 2026-10-12: the MVP works, the Milestone 8 player redesign and the Milestone 8b refinement pass (landscape cards for widescreen art, Spotify logo removed, swipe gestures, per-app volume, side buttons as volume keys) are done
+(see `docs/milestones/MVP-media-companion.md`, `M8-player-redesign.md`, `M8b-art-layout-gestures-volume.md`). Next, in this order:
 
-1. Collect the owner's feedback on the new player screen and fix what they point out (spacing, sizes, the fallback font for non-Latin titles - many YouTube titles have them).
-2. B. M9 Cyberpunk idle screen (shown when nothing is playing; clock; `NO ACTIVE PLAYBACK`).
+1. Collect the owner's feedback on the refined screen (spacing, sizes, gesture feel, the PWR-key check, fallback font for non-Latin titles - many YouTube titles have them) and fix what they point out.
+2. B. M9 Cyberpunk idle screen (shown when nothing is playing; clock; `NO ACTIVE PLAYBACK`) - the owner asked not to start it before the 8b pass was complete.
 3. C. M10 full-screen album-art polish.
-4. D. M11 first-run Wi-Fi setup, E. M12 companion installer / auto-start / firewall helper, F. M13 pairing + security.
+4. D. M11 first-run Wi-Fi setup (reset gesture = long press of BOOT while running, NOT at power-up), E. M12 companion installer / auto-start / firewall helper, F. M13 pairing + security.
 5. A targeted touch stress soak (top band, edges, rapid taps) before the product is finalised.
 
 The birthday intro is dropped - do not work on it.

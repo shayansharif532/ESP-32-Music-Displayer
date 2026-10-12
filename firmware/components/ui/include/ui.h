@@ -9,11 +9,16 @@
 #include <stdint.h>
 #include "lvgl.h"
 
-/* Where the cover is drawn in the normal (non full-screen) layout. The network side asks the companion for a cover of
- * exactly UI_ART_SIZE pixels (no scaling) and bakes the soft shadow behind this rectangle into the background image. */
+/* The cover is shown at its own shape: a square art_size x art_size (UI_ART_SIZE), or - for 16:9 video thumbnails and other
+ * wide art - a landscape card up to UI_ART_MAX_W wide (never stretched). The network side asks the companion for a cover that
+ * already has the size it is drawn at (no scaling) and bakes the soft shadow behind ui_art_area() into the background image. */
 #define UI_ART_SIZE     312
+#define UI_ART_MAX_W    432
 #define UI_ART_X        ((480 - UI_ART_SIZE) / 2)
 #define UI_ART_Y        18
+
+/* Where a cover of w x h pixels is drawn in the normal (non full-screen) layout. Pure function: no LVGL lock needed. */
+lv_area_t ui_art_area(int w, int h);
 
 typedef enum {
     UI_CMD_PREV,
@@ -53,10 +58,16 @@ void ui_set_art(const lv_image_dsc_t *art, const lv_image_dsc_t *bg);
 /* One small status line at the very top (empty/NULL text hides it). */
 void ui_set_status(ui_status_level_t level, const char *text);
 
+/* Brief translucent "Volume 65%" pill (about one second, then it fades). percent < 0: the displayed app has no volume to
+ * control ("No volume control"), -2: the PC did not answer; muted shows "Muted". No permanent screen space is used. */
+void ui_show_volume(int percent, bool muted);
+
 /* Monotonic count of touch presses seen by the UI (for soak-test logging). */
 uint32_t ui_touch_count(void);
 
 #ifdef APP_DEV_TOOLS
 /* Development only: act as if a control was tapped ("play", "next", "prev", "art"). */
 void ui_debug_tap(const char *which);
+/* Development only: drive a virtual finger through the real LVGL input path (hit-testing, swipes, clicks). Callable from any task. */
+void ui_debug_touch(int x, int y, bool pressed);
 #endif

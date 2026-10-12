@@ -3,11 +3,17 @@
  * Look: a blurred, darkened full-screen version of the cover is the background (one pre-baked RGB565 image, see
  * pc_media/pc_art.c); the sharp cover sits on it with no frame or card; title and artist are centred below, then a thin
  * progress line with the times at its ends, and the transport controls (big white play button, plain prev/next icons).
+ *
+ * The cover keeps its own shape: square art is a large square, 16:9 video thumbnails are a landscape card (rounded
+ * corners, never stretched), and the title / artist move with it. Extra touch input (no permanent widgets):
+ *   - horizontal swipe on the screen: right = next track, left = previous track (not from the progress bar)
+ *   - a short translucent "Volume 65%" pill on top when the side buttons change the volume
  */
 #include "ui.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
@@ -16,19 +22,32 @@
 /* ---- layout ------------------------------------------------------------------------------------ */
 #define SCR             480
 #define ART_RADIUS      14
-#define FULL_SIZE       456
-#define FULL_POS        ((SCR - FULL_SIZE) / 2)
-
-#define TITLE_Y         (UI_ART_Y + UI_ART_SIZE + 6)       /* 336 */
-#define ARTIST_Y        (TITLE_Y + 31)                     /* 367 */
+#define FULL_SIZE       456                                /* longest side of the cover in full-screen mode */
+#define SQUARE_MIN_H    (UI_ART_SIZE - 8)                  /* covers at least this tall are laid out like a square */
+#define GAP_SQUARE      6                                  /* cover -> title */
+#define GAP_LANDSCAPE   18
+#define TEXT_BLOCK_H    55                                 /* title (31) + artist (24) */
+#define LAYOUT_TOP      22                                 /* landscape card + text are centred between these two lines */
+#define LAYOUT_BOTTOM   396
 #define BAR_Y           406                                /* vertical centre of the progress line */
-#define BAR_W           UI_ART_SIZE                        /* as wide as the cover */
+#define BAR_X           UI_ART_X
+#define BAR_W           UI_ART_SIZE                        /* as wide as a square cover */
 #define BAR_H           4
 #define TIME_W          58
 #define CTRL_Y          446                                /* vertical centre of the control row */
 #define PLAY_D          60
 #define SIDE_D          64                                 /* touch area of prev / next (no visible circle) */
 #define SIDE_DX         112
+
+/* ---- touch gestures ---------------------------------------------------------------------------- */
+#define SWIPE_MIN_DX    72      /* px of horizontal travel before it counts as a swipe (a tap moves < 10) */
+#define SWIPE_MAX_DY    44      /* more vertical travel than this at any time: not a swipe */
+#define SWIPE_MAX_MS    1000    /* slower than this: a drag, not a swipe */
+#define TAP_SLOP        24      /* a press that moved further than this is not a tap (no full-screen toggle / button press) */
+#define FX_SIZE         92
+#define FX_MS           420
+#define VOL_HOLD_MS     900
+#define VOL_FADE_MS     260
 
 /* ---- palette ----------------------------------------------------------------------------------- */
 #define COL_SCREEN_TOP  0x1D1D36                           /* shown when there is no artwork */
@@ -52,6 +71,9 @@ static struct {
     lv_obj_t *status, *title, *artist;
     lv_obj_t *slider, *t_elapsed, *t_total;
     lv_obj_t *btn_prev, *btn_play, *btn_next, *lbl_play;
+    lv_obj_t *fx, *fx_lbl;               /* swipe feedback (top-most) */
+    lv_obj_t *vol, *vol_lbl, *vol_bar;   /* volume pill (top-most) */
+    lv_timer_t *vol_timer;
 
     ui_cmd_cb_t cb;
     void *ctx;
@@ -59,6 +81,9 @@ static struct {
     bool has_track;
     bool playing;
     bool fullscreen;
+    bool can_prev, can_next;
+    int art_w, art_h;                    /* pixel size of the cover on screen (normal layout) */
+    int fx_dir;
     uint32_t duration_ms;
     uint32_t anchor_ms;      /* progress at anchor_tick */
     uint32_t anchor_tick;
@@ -66,7 +91,68 @@ static struct {
     bool ready;
 } s;
 
+/* swipe tracking for the current touch (LVGL task only) */
+static struct {
+    bool tracking;           /* a touch that may still turn into a swipe */
+    bool vertical;           /* strayed too far vertically: never a swipe */
+    bool moved;              /* travelled further than TAP_SLOP: not a tap */
+    bool swiped;             /* a swipe was already acted on during this touch */
+    int32_t x0, y0;
+    uint32_t t0;
+} sw;
+
 static atomic_uint_fast32_t s_touches;
+
+/* ---- layout ------------------------------------------------------------------------------------ */
+
+lv_area_t ui_art_area(int w, int h)
+{
+    if (w < 16 || h < 16) {
+        w = h = UI_ART_SIZE;
+    }
+    if (w > UI_ART_MAX_W) {
+        w = UI_ART_MAX_W;
+    }
+    if (h > UI_ART_SIZE) {
+        h = UI_ART_SIZE;
+    }
+    int y = UI_ART_Y;
+    if (h < SQUARE_MIN_H) {              /* shorter than a square: centre card + title + artist between the status line and the bar */
+        int group = h + GAP_LANDSCAPE + TEXT_BLOCK_H;
+        y = LAYOUT_TOP + (LAYOUT_BOTTOM - LAYOUT_TOP - group) / 2;
+        if (y < UI_ART_Y) {
+            y = UI_ART_Y;
+        }
+    }
+    int x = (SCR - w) / 2;
+    lv_area_t a = { x, y, x + w - 1, y + h - 1 };
+    return a;
+}
+
+static int title_y_for(const lv_area_t *a)
+{
+    int h = a->y2 - a->y1 + 1;
+    return a->y2 + 1 + (h < SQUARE_MIN_H ? GAP_LANDSCAPE : GAP_SQUARE);
+}
+
+/* Positions the cover and the two text lines for the current cover shape / full-screen state. */
+static void apply_layout(void)
+{
+    lv_area_t a = ui_art_area(s.art_w, s.art_h);
+    int w = a.x2 - a.x1 + 1, h = a.y2 - a.y1 + 1;
+    if (s.fullscreen) {                  /* same aspect ratio, longest side = FULL_SIZE (never stretched) */
+        int fw = w >= h ? FULL_SIZE : FULL_SIZE * w / h;
+        int fh = w >= h ? FULL_SIZE * h / w : FULL_SIZE;
+        lv_obj_set_size(s.art_box, fw, fh);
+        lv_obj_set_pos(s.art_box, (SCR - fw) / 2, (SCR - fh) / 2);
+    } else {
+        lv_obj_set_size(s.art_box, w, h);
+        lv_obj_set_pos(s.art_box, a.x1, a.y1);
+    }
+    int ty = title_y_for(&a);
+    lv_obj_align(s.title, LV_ALIGN_TOP_MID, 0, ty);
+    lv_obj_align(s.artist, LV_ALIGN_TOP_MID, 0, ty + 31);
+}
 
 /* ---- helpers ---------------------------------------------------------------------------------- */
 
@@ -175,9 +261,10 @@ static void fire(ui_cmd_t cmd, uint32_t arg)
     }
 }
 
-static void on_prev(lv_event_t *e)  { (void)e; fire(UI_CMD_PREV, 0); }
-static void on_play(lv_event_t *e)  { (void)e; fire(UI_CMD_PLAY_PAUSE, 0); }
-static void on_next(lv_event_t *e)  { (void)e; fire(UI_CMD_NEXT, 0); }
+/* A press that travelled (e.g. a swipe that started on a button) must not also act as a tap on that button. */
+static void on_prev(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_PREV, 0); }
+static void on_play(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_PLAY_PAUSE, 0); }
+static void on_next(lv_event_t *e)  { (void)e; if (!sw.moved) fire(UI_CMD_NEXT, 0); }
 
 static void on_slider_changed(lv_event_t *e)
 {
@@ -216,22 +303,105 @@ static void set_chrome_hidden(bool hidden)
 static void on_art_clicked(lv_event_t *e)
 {
     (void)e;
-    s.fullscreen = !s.fullscreen;
-    if (s.fullscreen) {
-        set_chrome_hidden(true);
-        lv_obj_set_size(s.art_box, FULL_SIZE, FULL_SIZE);
-        lv_obj_set_pos(s.art_box, FULL_POS, FULL_POS);
-    } else {
-        lv_obj_set_size(s.art_box, UI_ART_SIZE, UI_ART_SIZE);
-        lv_obj_set_pos(s.art_box, UI_ART_X, UI_ART_Y);
-        set_chrome_hidden(false);
+    if (sw.moved) {                      /* a drag that happened to start on the cover is not a tap */
+        return;
     }
+    s.fullscreen = !s.fullscreen;
+    set_chrome_hidden(s.fullscreen);
+    apply_layout();
 }
 
 static void on_indev_pressed(lv_event_t *e)
 {
     (void)e;
     atomic_fetch_add(&s_touches, 1);    /* no logging here: this runs on the LVGL task */
+}
+
+/* ---- swipe feedback ------------------------------------------------------------------------------ */
+
+static void fx_anim_cb(void *var, int32_t v)       /* v: 0..255 over the animation */
+{
+    (void)var;
+    lv_obj_set_style_opa(s.fx, (lv_opa_t)(((255 - v) * 210) / 255), 0);
+    lv_obj_set_style_translate_x(s.fx, s.fx_dir * (v * 34 / 255), 0);
+}
+
+static void fx_anim_done(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_add_flag(s.fx, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_swipe_fx(int dir)       /* dir: +1 = next (swipe right), -1 = previous */
+{
+    s.fx_dir = dir;
+    lv_label_set_text(s.fx_lbl, dir > 0 ? LV_SYMBOL_NEXT : LV_SYMBOL_PREV);
+    lv_obj_center(s.fx_lbl);
+    lv_area_t a = ui_art_area(s.art_w, s.art_h);
+    int cy = s.fullscreen ? SCR / 2 : (a.y1 + a.y2) / 2;
+    lv_obj_set_pos(s.fx, (SCR - FX_SIZE) / 2, cy - FX_SIZE / 2);
+    lv_anim_delete(NULL, fx_anim_cb);
+    lv_obj_remove_flag(s.fx, LV_OBJ_FLAG_HIDDEN);
+    fx_anim_cb(NULL, 0);
+    lv_anim_t an;
+    lv_anim_init(&an);
+    lv_anim_set_var(&an, s.fx);
+    lv_anim_set_exec_cb(&an, fx_anim_cb);
+    lv_anim_set_values(&an, 0, 255);
+    lv_anim_set_duration(&an, FX_MS);
+    lv_anim_set_path_cb(&an, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&an, fx_anim_done);
+    lv_anim_start(&an);
+}
+
+/* ---- swipe detection (screen-level; the progress bar does not bubble its events, so it never starts a swipe) ---- */
+
+static void on_screen_touch(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        sw.tracking = true;
+        sw.vertical = sw.moved = sw.swiped = false;
+        sw.x0 = p.x;
+        sw.y0 = p.y;
+        sw.t0 = lv_tick_get();
+        return;
+    }
+    if (code != LV_EVENT_PRESSING || !sw.tracking) {
+        return;
+    }
+    int32_t dx = p.x - sw.x0, dy = p.y - sw.y0;
+    int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+    if (adx > TAP_SLOP || ady > TAP_SLOP) {
+        sw.moved = true;
+    }
+    if (ady > SWIPE_MAX_DY) {
+        sw.vertical = true;
+    }
+    if (sw.vertical || sw.swiped || lv_tick_elaps(sw.t0) > SWIPE_MAX_MS) {
+        return;
+    }
+    if (adx >= SWIPE_MIN_DX && ady * 2 <= adx) {         /* far enough, and clearly more horizontal than vertical */
+        sw.swiped = true;
+        sw.tracking = false;
+        lv_indev_wait_release(indev);                    /* no release / click on whatever the finger started on */
+        if (dx > 0) {                                    /* swipe right -> next track */
+            if (s.can_next) {
+                show_swipe_fx(+1);
+                fire(UI_CMD_NEXT, 0);
+            }
+        } else if (s.can_prev) {                         /* swipe left -> previous track */
+            show_swipe_fx(-1);
+            fire(UI_CMD_PREV, 0);
+        }
+    }
 }
 
 /* Runs on the LVGL task every TICK_PERIOD_MS: moves the bar between polls. No logging, no allocation. */
@@ -246,6 +416,33 @@ static void tick_cb(lv_timer_t *t)
         apply_slider(pos);
         set_elapsed_label(pos);
     }
+}
+
+/* ---- volume pill ------------------------------------------------------------------------------- */
+
+static void vol_fade_cb(void *var, int32_t v)
+{
+    (void)var;
+    lv_obj_set_style_opa(s.vol, (lv_opa_t)v, 0);
+}
+
+static void vol_fade_done(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_add_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void vol_timer_cb(lv_timer_t *t)
+{
+    lv_timer_pause(t);
+    lv_anim_t an;
+    lv_anim_init(&an);
+    lv_anim_set_var(&an, s.vol);
+    lv_anim_set_exec_cb(&an, vol_fade_cb);
+    lv_anim_set_values(&an, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&an, VOL_FADE_MS);
+    lv_anim_set_completed_cb(&an, vol_fade_done);
+    lv_anim_start(&an);
 }
 
 /* ---- construction ----------------------------------------------------------------------------- */
@@ -297,6 +494,7 @@ static lv_obj_t *make_button(lv_obj_t *scr, int32_t d, uint32_t fill, uint32_t f
         lv_obj_set_style_opa(b, LV_OPA_50, LV_STATE_PRESSED);
     }
     lv_obj_set_ext_click_area(b, 6);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_EVENT_BUBBLE);                  /* so a swipe that starts on a button is still seen */
     lv_obj_t *l = make_label(b, font, fg);
     lv_label_set_text(l, symbol);
     lv_obj_center(l);
@@ -306,15 +504,81 @@ static lv_obj_t *make_button(lv_obj_t *scr, int32_t d, uint32_t fill, uint32_t f
     return b;
 }
 
+/* Overlays are the last (= top-most) children of the screen and never clickable, so they never take part in hit-testing. */
+static void make_overlays(void)
+{
+    lv_obj_t *top = lv_screen_active();
+
+    s.fx = lv_obj_create(top);
+    lv_obj_remove_style_all(s.fx);
+    lv_obj_set_size(s.fx, FX_SIZE, FX_SIZE);
+    lv_obj_set_style_radius(s.fx, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s.fx, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s.fx, LV_OPA_50, 0);
+    lv_obj_remove_flag(s.fx, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    s.fx_lbl = make_label(s.fx, &lv_font_montserrat_32, 0xFFFFFF);
+    lv_label_set_text(s.fx_lbl, LV_SYMBOL_NEXT);
+    lv_obj_center(s.fx_lbl);
+    lv_obj_add_flag(s.fx, LV_OBJ_FLAG_HIDDEN);
+
+    s.vol = lv_obj_create(top);
+    lv_obj_remove_style_all(s.vol);
+    lv_obj_set_size(s.vol, 236, 62);
+    lv_obj_align(s.vol, LV_ALIGN_TOP_MID, 0, 20);                  /* just below the status line */
+    lv_obj_set_style_radius(s.vol, 31, 0);
+    lv_obj_set_style_bg_color(s.vol, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s.vol, LV_OPA_60, 0);
+    lv_obj_remove_flag(s.vol, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    s.vol_lbl = make_label(s.vol, &lv_font_montserrat_20, 0xFFFFFF);
+    lv_label_set_text(s.vol_lbl, "Volume");
+    lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
+    s.vol_bar = lv_bar_create(s.vol);
+    lv_obj_remove_style_all(s.vol_bar);
+    lv_obj_set_size(s.vol_bar, 168, 4);
+    lv_obj_align(s.vol_bar, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_style_radius(s.vol_bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(s.vol_bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s.vol_bar, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s.vol_bar, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s.vol_bar, lv_color_white(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s.vol_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_bar_set_range(s.vol_bar, 0, 100);
+    lv_obj_add_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
+    s.vol_timer = lv_timer_create(vol_timer_cb, VOL_HOLD_MS, NULL);
+    lv_timer_pause(s.vol_timer);
+}
+
+#ifdef APP_DEV_TOOLS
+/* A second, virtual pointer device so the dev tools can drive real swipes / taps through the whole LVGL input path. */
+static struct { volatile int32_t x, y; volatile bool pressed; } s_vt;
+
+static void vt_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    data->point.x = s_vt.x;
+    data->point.y = s_vt.y;
+    data->state = s_vt.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+void ui_debug_touch(int x, int y, bool pressed)
+{
+    s_vt.x = x;
+    s_vt.y = y;
+    s_vt.pressed = pressed;
+}
+#endif
+
 void ui_init(ui_cmd_cb_t cb, void *ctx)
 {
     if (!bsp_display_lock(0)) {
         return;
     }
     memset(&s, 0, sizeof s);
+    memset(&sw, 0, sizeof sw);
     s.cb = cb;
     s.ctx = ctx;
     s.shown_sec = -1;
+    s.art_w = s.art_h = UI_ART_SIZE;
 
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(COL_SCREEN_TOP), 0);
@@ -322,6 +586,8 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_obj_set_style_bg_grad_dir(scr, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(scr, on_screen_touch, LV_EVENT_PRESSED, NULL);      /* swipe detection (bubbled from the cover / buttons) */
+    lv_obj_add_event_cb(scr, on_screen_touch, LV_EVENT_PRESSING, NULL);
 
     /* blurred artwork background (bottom-most), hidden until artwork arrives */
     s.bg_img = lv_image_create(scr);
@@ -351,6 +617,7 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_obj_set_style_clip_corner(s.art_box, true, 0);
     lv_obj_set_style_bg_color(s.art_box, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_bg_opa(s.art_box, LV_OPA_10, 0);                 /* placeholder tint; cleared when art arrives */
+    lv_obj_add_flag(s.art_box, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(s.art_box, on_art_clicked, LV_EVENT_CLICKED, NULL);
 
     s.art_icon = make_label(s.art_box, &lv_font_montserrat_48, 0xFFFFFF);
@@ -364,15 +631,16 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_obj_add_flag(s.art_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s.art_img, LV_OBJ_FLAG_CLICKABLE);     /* clicks go to the box */
 
-    /* title / artist */
-    s.title = make_text_line(scr, &lv_font_montserrat_26, COL_TEXT, TITLE_Y);
-    s.artist = make_text_line(scr, &lv_font_montserrat_20, COL_ARTIST, ARTIST_Y);
+    /* title / artist (positions are set by apply_layout) */
+    s.title = make_text_line(scr, &lv_font_montserrat_26, COL_TEXT, 0);
+    s.artist = make_text_line(scr, &lv_font_montserrat_20, COL_ARTIST, 0);
 
-    /* progress / seek: a thin line, the knob only appears while dragging */
+    /* progress / seek: a thin line, the knob only appears while dragging. Its events do not bubble: a drag that starts
+     * here seeks and never changes the track. */
     s.slider = lv_slider_create(scr);
     lv_slider_set_range(s.slider, 0, SLIDER_MAX);
     lv_obj_set_size(s.slider, BAR_W, BAR_H);
-    lv_obj_set_pos(s.slider, UI_ART_X, BAR_Y - BAR_H / 2);
+    lv_obj_set_pos(s.slider, BAR_X, BAR_Y - BAR_H / 2);
     lv_obj_set_ext_click_area(s.slider, 22);
     lv_obj_set_style_bg_color(s.slider, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s.slider, LV_OPA_30, LV_PART_MAIN);
@@ -386,8 +654,8 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_obj_add_event_cb(s.slider, on_slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s.slider, on_slider_released, LV_EVENT_RELEASED, NULL);
 
-    s.t_elapsed = make_time_label(scr, LV_TEXT_ALIGN_RIGHT, UI_ART_X - 8 - TIME_W);
-    s.t_total = make_time_label(scr, LV_TEXT_ALIGN_LEFT, UI_ART_X + BAR_W + 8);
+    s.t_elapsed = make_time_label(scr, LV_TEXT_ALIGN_RIGHT, BAR_X - 8 - TIME_W);
+    s.t_total = make_time_label(scr, LV_TEXT_ALIGN_LEFT, BAR_X + BAR_W + 8);
 
     /* transport controls */
     s.btn_prev = make_button(scr, SIDE_D, 0, 0, false, LV_SYMBOL_PREV, &lv_font_montserrat_24, COL_TEXT, NULL);
@@ -405,6 +673,8 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_label_set_text(s.title, "Starting...");
     lv_label_set_text(s.artist, "");
     set_play_icon(false);
+    apply_layout();
+    make_overlays();
 
     lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
@@ -412,6 +682,12 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     if (indev) {
         lv_indev_add_event_cb(indev, on_indev_pressed, LV_EVENT_PRESSED, NULL);
     }
+#ifdef APP_DEV_TOOLS
+    lv_indev_t *vt = lv_indev_create();
+    lv_indev_set_type(vt, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(vt, vt_read_cb);
+    lv_indev_set_display(vt, lv_display_get_default());
+#endif
 
     s.ready = true;
     bsp_display_unlock();
@@ -440,6 +716,8 @@ static void show_placeholder_art(void)
     lv_obj_add_flag(s.art_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s.art_icon, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_bg_opa(s.art_box, LV_OPA_10, 0);
+    s.art_w = s.art_h = UI_ART_SIZE;
+    apply_layout();
     show_default_bg();
 }
 
@@ -450,6 +728,7 @@ void ui_show_idle(const char *line1, const char *line2)
     }
     s.has_track = false;
     s.playing = false;
+    s.can_prev = s.can_next = false;
     s.duration_ms = 0;
     s.anchor_ms = 0;
     s.shown_sec = -1;
@@ -484,6 +763,8 @@ void ui_set_progress(uint32_t progress_ms, bool playing)
 
 static void apply_caps(bool can_prev, bool can_next, bool can_seek)
 {
+    s.can_prev = can_prev;
+    s.can_next = can_next;
     lv_obj_set_style_opa(s.btn_prev, can_prev ? LV_OPA_COVER : LV_OPA_40, 0);
     lv_obj_set_style_opa(s.btn_next, can_next ? LV_OPA_COVER : LV_OPA_40, 0);
     lv_obj_set_style_opa(s.slider, can_seek ? LV_OPA_COVER : LV_OPA_60, 0);
@@ -504,10 +785,13 @@ void ui_set_art(const lv_image_dsc_t *art, const lv_image_dsc_t *bg)
         return;
     }
     if (art) {
+        s.art_w = art->header.w;
+        s.art_h = art->header.h;
         lv_image_set_src(s.art_img, art);
         lv_obj_remove_flag(s.art_img, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.art_icon, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_bg_opa(s.art_box, LV_OPA_TRANSP, 0);
+        apply_layout();                                  /* square cover or landscape card, with the text following it */
         if (bg) {
             lv_image_set_src(s.bg_img, bg);
             lv_obj_remove_flag(s.bg_img, LV_OBJ_FLAG_HIDDEN);
@@ -531,6 +815,32 @@ void ui_set_status(ui_status_level_t level, const char *text)
     bsp_display_unlock();
 }
 
+void ui_show_volume(int percent, bool muted)
+{
+    if (!s.ready || !bsp_display_lock(1000)) {
+        return;
+    }
+    char buf[40];
+    if (percent < 0) {
+        snprintf(buf, sizeof buf, "%s", percent == -2 ? LV_SYMBOL_WARNING "  PC not reachable" : LV_SYMBOL_MUTE "  No volume control");
+        lv_bar_set_value(s.vol_bar, 0, LV_ANIM_OFF);
+    } else if (muted || percent == 0) {
+        snprintf(buf, sizeof buf, LV_SYMBOL_MUTE "  %s", muted ? "Muted" : "Volume 0%");
+        lv_bar_set_value(s.vol_bar, 0, LV_ANIM_OFF);
+    } else {
+        snprintf(buf, sizeof buf, "%s  Volume %d%%", percent < 50 ? LV_SYMBOL_VOLUME_MID : LV_SYMBOL_VOLUME_MAX, percent);
+        lv_bar_set_value(s.vol_bar, percent, LV_ANIM_OFF);
+    }
+    lv_label_set_text(s.vol_lbl, buf);
+    lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
+    lv_anim_delete(s.vol, vol_fade_cb);
+    lv_obj_set_style_opa(s.vol, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_reset(s.vol_timer);
+    lv_timer_resume(s.vol_timer);
+    bsp_display_unlock();
+}
+
 uint32_t ui_touch_count(void)
 {
     return (uint32_t)atomic_load(&s_touches);
@@ -543,6 +853,7 @@ void ui_debug_tap(const char *which)
         return;
     }
     lv_obj_t *target = NULL;
+    sw.moved = false;                    /* these taps do not come with a PRESSED event that would reset it */
     if (strcmp(which, "play") == 0) target = s.btn_play;
     else if (strcmp(which, "next") == 0) target = s.btn_next;
     else if (strcmp(which, "prev") == 0) target = s.btn_prev;

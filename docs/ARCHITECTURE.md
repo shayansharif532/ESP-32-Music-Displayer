@@ -32,21 +32,22 @@ tokens or internet access is involved.
   site that sets the Media Session API) and players all publish to it. Control goes through the same session, so next/previous behave
   exactly like the keyboard media keys.
 * **No credentials to get wrong**: no OAuth, no tokens, no Premium requirement, no Spotify developer account, no 5-user cap.
-* **Simple, fast firmware**: plain HTTP on the LAN (no TLS handshakes on the ESP32), small JSON, artwork pre-shrunk by the PC to a
-  300x300 baseline JPEG that the ESP32's decoder handles without scaling or exotic formats.
+* **Simple, fast firmware**: plain HTTP on the LAN (no TLS handshakes on the ESP32), small JSON, artwork pre-rendered by the PC at exactly the
+  size it is drawn (a square or a landscape card) as a baseline JPEG that the ESP32's decoder handles without scaling or exotic formats.
 * **Trade-off accepted**: the PC must be on, on the same network, and running the companion. If it is not, the display says so.
 
 ## Components
 
 | Component | Where | Responsibility |
 |---|---|---|
-| Windows companion | `companion/desk_media_companion/` | session selection, now-playing snapshot with extrapolated position, artwork normalisation, controls, HTTP API, discovery beacon, auto-start |
+| Windows companion | `companion/desk_media_companion/` | session selection, now-playing snapshot with extrapolated position, artwork clean-up and aspect-preserving rendering (`artwork.py`), controls, **per-app volume (`volume.py`, Core Audio sessions)**, HTTP API, discovery beacon, auto-start |
 | `wifi_mgr` | `firmware/components/wifi_mgr/` | station Wi-Fi, exponential-backoff reconnect, SNTP (for the future clock), credentials RAM-only, nothing sensitive logged |
-| `pc_media` | `firmware/components/pc_media/` | listens for the beacon (or uses a fixed IP), polls `/now-playing`, fetches + decodes artwork into two fixed PSRAM buffers, queues commands, reports link status |
-| `ui` | `firmware/components/ui/` | the LVGL Now Playing screen; thread-safe API; local progress interpolation; callbacks only enqueue |
+| `pc_media` | `firmware/components/pc_media/` | listens for the beacon (or uses a fixed IP), polls `/now-playing` (time-scheduled, never starved by commands), fetches + decodes artwork (square or landscape, up to 432x320) into two fixed PSRAM buffers, queues commands (volume commands coalesced), reports link status and volume results |
+| `side_keys` | `firmware/components/side_keys/` | the two side buttons: BOOT (GPIO0) and PWR (AXP2101 key flags polled over I2C) as volume down / up, debounce, hold-repeat (capped at 3 s) |
+| `ui` | `firmware/components/ui/` | the LVGL Now Playing screen (square cover or landscape card with the text following it); thread-safe API; local progress interpolation; swipe gestures (right = next, left = previous); swipe-feedback disc and the transient "Volume 65%" pill; callbacks only enqueue |
 | `main` | `firmware/main/` | display/LVGL start-up (24 KB LVGL stack on core 1, one draw unit), glue: companion events → UI calls, UI taps → commands, status line; UI-only demo when no Wi-Fi credentials are built in; health/soak logging |
 
-Tasks (ESP32): LVGL task (core 1, prio 4); `pc_poll` and `pc_discovery` (core 0, prio 3); Wi-Fi/lwIP (core 0); health logger (prio 1).
+Tasks (ESP32): LVGL task (core 1, prio 4); `pc_poll` and `pc_discovery` (core 0, prio 3); `side_keys` (core 0, prio 4, 20 ms poll of GPIO0 and the AXP2101 key flags); Wi-Fi/lwIP (core 0); health logger (prio 1).
 Network code never calls LVGL directly except through the thread-safe `ui_*` functions; LVGL callbacks never block (they post to a queue).
 
 ## Protocol (companion HTTP API, version 1)
@@ -56,9 +57,11 @@ Base: `http://<pc-ip>:8765` (port configurable). All JSON is UTF-8.
 | Request | Answer |
 |---|---|
 | `GET /now-playing` | JSON state (below). Always 200 while the companion runs; `has_session:false` when nothing is playing |
-| `GET /artwork[?size=N]` | `image/jpeg`, square, **baseline** (non-progressive) 4:2:0, default 300x300 (64..640 allowed). Near-square art is centre-cropped; wide/tall art (16:9 video thumbnails) is letterboxed. Headers `ETag: "<art_id>-<size>"`, `X-Art-Id`. `404` when the session has no artwork. Honours `If-None-Match` (304) |
+| `GET /artwork[?size=N[&maxw=W]]` | `image/jpeg`, **baseline** (non-progressive) 4:2:0. Without `maxw`: a square `size`x`size` (default 300; 64..640; wide art letterboxed on a blurred copy - legacy). **With `maxw`: the artwork keeps its aspect ratio inside a `maxw`x`size` box** - square art stays `size`x`size`, 16:9 art becomes a landscape card (432x242 for `size=312&maxw=432`), never stretched; extreme ratios are centre-cropped to 2.4:1 / 0.7:1. Before rendering, app logos baked into the image (Spotify's alpha composite) and symmetric black letterbox bars are removed (`artwork.py`). Headers `ETag: "<art_id>-<size>-<maxw>"`, `X-Art-Id`. `404` when the session has no artwork. Honours `If-None-Match` (304) |
 | `POST /control/playpause` · `/control/play` · `/control/pause` · `/control/next` · `/control/previous` | `{"ok":true,"action":"next","app":"Spotify.exe"}`; `ok:false` when the session refuses (control not enabled by that app) |
 | `POST /control/seek?position_ms=N` | as above; `ok:false` if the session does not support seeking |
+| `GET /volume` | the **per-application** volume of the displayed app (its Windows audio-session volume, never the master volume): `{"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}`; `ok:false` + `"error":"no audio session found for ..."` when the app has none |
+| `POST /control/volume-up` · `/control/volume-down` (`?step=5`, `&app=<app id>`) · `POST /volume?level=0..100` | same answer with the new volume. `app` = the app the display is showing; honoured only if that app has a media session right now (otherwise the displayed session is used). Core Audio session mapping and browser limits: `docs/milestones/M8b-art-layout-gestures-volume.md` |
 | `GET /health` | `{"ok":true,"service":"desk-media-companion","version":"0.1.0"}` |
 
 `/now-playing` fields: `ok`, `version`, `has_session`, `app` (Windows app id, e.g. `Spotify.exe`, `Chrome`), `state`
@@ -92,7 +95,7 @@ four transport actions is exposed. A pairing token (Milestone 13) is the planned
 
 ## Memory / performance notes (ESP32)
 
-* Artwork: two permanent 320x320 RGB565 PSRAM buffers (no per-track allocation); download buffer grows once; JPEG decode ~100-200 ms.
+* Artwork: two permanent 432x320 RGB565 PSRAM buffers (no per-track allocation), one RGB888 decode scratch and two 480x480 background images; download buffer grows once; JPEG decode + background ~100-400 ms.
 * Polling every 1 s of a ~400-byte JSON over a kept-alive HTTP connection; the UI interpolates progress locally (250 ms) so the bar is smooth.
 * LVGL task stack 24 KB (measured use ~4 KB at idle); internal RAM stays > 200 KB free; PSRAM > 6 MB free.
 

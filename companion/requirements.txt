@@ -5,3 +5,5 @@ winrt-Windows.Foundation>=3.2,<4
 winrt-Windows.Foundation.Collections>=3.2,<4
 pillow>=11
 psutil>=6
+pycaw>=20240210
+comtypes>=1.4

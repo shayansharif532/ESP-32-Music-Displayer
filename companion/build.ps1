@@ -24,6 +24,8 @@ try {
         --hidden-import winrt.windows.storage.streams `
         --hidden-import winrt.windows.foundation `
         --hidden-import winrt.windows.foundation.collections `
+        --collect-submodules pycaw `
+        --collect-submodules comtypes `
         --exclude-module tkinter --exclude-module unittest --exclude-module pydoc `
         run_companion.py
 } finally {

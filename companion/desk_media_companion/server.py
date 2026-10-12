@@ -1,9 +1,17 @@
 """Small local HTTP API for the desk display (plain HTTP, LAN only).
 
     GET  /now-playing              current media session as JSON
-    GET  /artwork[?size=300]       current artwork, baseline JPEG, square (ETag = art_id)
+    GET  /artwork[?size=312[&maxw=432]]
+                                   current artwork, baseline JPEG (ETag = art_id + size). Without maxw: a size x size square.
+                                   With maxw: the artwork keeps its aspect ratio inside a maxw x size box (square art stays
+                                   square, 16:9 art becomes a landscape card); never stretched. App logos baked into the
+                                   image (Spotify) and black letterbox bars are removed first (see artwork.py).
     POST /control/playpause        also: /control/play  /control/pause  /control/next  /control/previous
     POST /control/seek?position_ms=N
+    GET  /volume                   volume of the app that is displayed (its own Windows audio-session volume, NOT the master volume)
+    POST /control/volume-up[?step=5][&app=Spotify.exe]   also: /control/volume-down   POST /volume?level=0..100
+                                   (app = the app the display shows; honoured only if that app has a media session)
+                                   -> {"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}
     GET  /health
 
 Safety rails: only private/loopback clients are served; the Host header must be an IP address (blocks DNS
@@ -25,6 +33,7 @@ from .media import MediaMonitor
 log = logging.getLogger("http")
 
 CONTROL_ACTIONS = {"playpause", "play", "pause", "next", "previous", "seek"}
+VOLUME_ACTIONS = {"volume-up", "volume-down"}
 _HOST_IP = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^\[[0-9a-fA-F:]+\](:\d+)?$|^localhost(:\d+)?$")
 
 
@@ -36,7 +45,10 @@ def _client_allowed(addr: str) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
-DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art"}
+DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
+                 "swipe_right", "swipe_left", "swipe_up", "swipe_diag", "swipe_bar", "swipe_text", "touch_cover", "touch_play",
+                 "key_up", "key_down", "keyhold_up", "keyhold_down", "swipe_right_shot", "swipe_left_shot", "key_up_shot", "key_down_shot",
+                 "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"}
 
 
 def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> ThreadingHTTPServer:
@@ -92,16 +104,22 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                     size = int(q.get("size", ["300"])[0])
                 except ValueError:
                     size = 300
-                art = monitor.artwork(size)
+                try:
+                    max_w = int(q["maxw"][0]) if "maxw" in q else None
+                except ValueError:
+                    max_w = None
+                art = monitor.artwork(size, max_w)
                 if art is None:
                     self._json(404, {"ok": False, "error": "no artwork"})
                     return
                 art_id, jpeg = art
-                etag = f'"{art_id}-{size}"'
+                etag = f'"{art_id}-{size}-{max_w or 0}"'
                 if self.headers.get("If-None-Match") == etag:
                     self._send(304, b"", "image/jpeg", {"ETag": etag})
                 else:
                     self._send(200, jpeg, "image/jpeg", {"ETag": etag, "X-Art-Id": art_id})
+            elif url.path == "/volume":
+                self._json(200, monitor.volume("get"))
             elif url.path == "/health":
                 self._json(200, {"ok": True, "service": "desk-media-companion", "version": __version__})
             else:
@@ -125,7 +143,23 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                 monitor.request_debug(dbg.group(1))
                 self._json(200, {"ok": True, "debug": dbg.group(1)})
                 return
-            m = re.fullmatch(r"/control/(\w+)", url.path)
+            if url.path == "/volume":                       # absolute: POST /volume?level=40
+                try:
+                    level = int(parse_qs(url.query).get("level", [""])[0])
+                except ValueError:
+                    self._json(400, {"ok": False, "error": "level (0..100) required"})
+                    return
+                self._json(200, monitor.volume("volume-set", level=level))
+                return
+            m = re.fullmatch(r"/control/([\w-]+)", url.path)
+            if m and m.group(1) in VOLUME_ACTIONS:           # relative: the displayed app's own volume, +/- step percent
+                q = parse_qs(url.query)
+                try:
+                    step = int(q.get("step", ["5"])[0])
+                except ValueError:
+                    step = 5
+                self._json(200, monitor.volume(m.group(1), step=step, app=q.get("app", [""])[0][:96]))
+                return
             if not m or m.group(1) not in CONTROL_ACTIONS:
                 self._json(404, {"ok": False, "error": "unknown control"})
                 return

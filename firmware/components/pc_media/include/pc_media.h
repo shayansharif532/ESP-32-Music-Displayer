@@ -42,6 +42,8 @@ typedef enum {
     PC_MEDIA_CMD_NEXT,
     PC_MEDIA_CMD_PREV,
     PC_MEDIA_CMD_SEEK,          /* arg = position in ms */
+    PC_MEDIA_CMD_VOLUME_UP,     /* arg = step in percent points (0 = 5): the displayed app's own volume, not the PC's master volume */
+    PC_MEDIA_CMD_VOLUME_DOWN,
 } pc_media_cmd_t;
 
 typedef struct {
@@ -49,6 +51,9 @@ typedef struct {
     /* New artwork: the cover and the blurred full-screen background built from it (RGB565 descriptors, valid until the
      * next on_art call returns), or both NULL when there is none. */
     void (*on_art)(const lv_image_dsc_t *art, const lv_image_dsc_t *bg, void *ctx);
+    /* Result of a volume command: the app's new volume 0..100 (muted = its session is muted), -1 when the displayed app has
+     * no controllable audio session, -2 when the PC did not answer. */
+    void (*on_volume)(int percent, bool muted, void *ctx);
     /* Development only: a one-shot request from the companion's /debug route ("screenshot", "tap_next", ...). */
     void (*on_debug)(const char *what, void *ctx);
     void (*on_status)(pc_media_status_t status, const char *detail, void *ctx);
@@ -58,8 +63,11 @@ typedef struct {
 typedef struct {
     const char *static_host;    /* "192.168.1.143" to skip discovery, or NULL / "" for automatic */
     uint16_t    port;           /* 0 = PC_MEDIA_DEFAULT_PORT */
-    uint16_t    art_size;       /* pixel size of the cover as drawn (square); the companion renders exactly this size */
-    struct { int x, y, size; } cover;   /* where the UI draws the cover - used for the shadow baked into the background */
+    /* The cover is requested from the companion inside this box and keeps its aspect ratio: square art comes back
+     * art_max_h x art_max_h, 16:9 art as a landscape card up to art_max_w wide. The companion renders exactly the size drawn. */
+    uint16_t    art_max_w, art_max_h;
+    /* Where the UI draws a cover of the given pixel size - used for the shadow baked into the background. */
+    lv_area_t (*cover_area)(int art_w, int art_h);
     pc_media_callbacks_t cbs;
 } pc_media_config_t;
 

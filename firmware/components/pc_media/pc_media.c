@@ -44,7 +44,7 @@ static struct {
     bool host_static;
     unsigned failures;
     pc_media_state_t st;
-    uint16_t art_size;
+    uint16_t art_max_w, art_max_h;
     char art_shown[16];
     int art_failures;
     pc_media_status_t status;
@@ -221,8 +221,8 @@ static void update_art(void)
     }
     int64_t t0 = esp_timer_get_time();
     const lv_image_dsc_t *dsc = NULL, *bg = NULL;
-    char path[40];
-    snprintf(path, sizeof path, "/artwork?size=%u", (unsigned)s.art_size);
+    char path[56];
+    snprintf(path, sizeof path, "/artwork?size=%u&maxw=%u", (unsigned)s.art_max_h, (unsigned)s.art_max_w);
     esp_err_t err = pc_http_request(host, port, path, false, 6000, &s.art);
     if (err == ESP_OK && s.art.status == 200 && s.art.body.len > 100 && !s.art.body.truncated) {
         err = pc_art_decode((const uint8_t *)s.art.body.data, s.art.body.len, &dsc, &bg);
@@ -310,9 +310,27 @@ static bool poll_once(void)
 
 /* ---- commands ------------------------------------------------------------------------------------- */
 
+/* Percent-encodes everything except unreserved characters (app ids can contain '!' and '_'). */
+static void url_encode(char *dst, size_t n, const char *src)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (; *src && o + 4 < n; src++) {
+        unsigned char c = (unsigned char)*src;
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '.' || c == '-' || c == '_') {
+            dst[o++] = (char)c;
+        } else {
+            dst[o++] = '%';
+            dst[o++] = HEX[c >> 4];
+            dst[o++] = HEX[c & 15];
+        }
+    }
+    dst[o] = '\0';
+}
+
 static void do_command(const cmd_msg_t *m)
 {
-    char host[16], path[64];
+    char host[16], path[192];
     uint16_t port;
     if (!get_host(host, sizeof host, &port)) {
         return;
@@ -336,12 +354,36 @@ static void do_command(const cmd_msg_t *m)
     case PC_MEDIA_CMD_SEEK:
         snprintf(path, sizeof path, "/control/seek?position_ms=%u", (unsigned)m->arg);
         break;
+    case PC_MEDIA_CMD_VOLUME_UP:
+    case PC_MEDIA_CMD_VOLUME_DOWN: {
+        /* Name the app the display is showing, so the volume goes to exactly that app even if the PC's own idea of the
+         * "current" session changed since the last poll. */
+        char app[sizeof s.st.app * 3 + 1];
+        url_encode(app, sizeof app, s.st.has_session ? s.st.app : "");
+        snprintf(path, sizeof path, "/control/volume-%s?step=%u&app=%s", m->cmd == PC_MEDIA_CMD_VOLUME_UP ? "up" : "down",
+                 (unsigned)(m->arg ? m->arg : 5), app);
+        break;
+    }
     default:
         return;
     }
+    const bool is_volume = (m->cmd == PC_MEDIA_CMD_VOLUME_UP || m->cmd == PC_MEDIA_CMD_VOLUME_DOWN);
     esp_err_t err = pc_http_request(host, port, path, true, HTTP_TIMEOUT_MS, &s.resp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "command %s failed: %s", path, esp_err_to_name(err));
+        if (is_volume && s.cbs.on_volume) {
+            s.cbs.on_volume(-2, false, s.cbs.ctx);             /* the PC did not answer */
+        }
+    } else if (is_volume) {
+        /* {"ok":true,"volume":65,"muted":false,...} or {"ok":false,"error":"no audio session found for ..."} */
+        cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
+        const cJSON *v = j ? cJSON_GetObjectItemCaseSensitive(j, "volume") : NULL;
+        int pct = (j && jbool(j, "ok") && cJSON_IsNumber(v)) ? (int)v->valuedouble : -1;
+        ESP_LOGI(TAG, "command %s -> volume %d%%%s", path, pct, pct < 0 ? " (unavailable)" : "");
+        if (s.cbs.on_volume) {
+            s.cbs.on_volume(pct, j ? jbool(j, "muted") : false, s.cbs.ctx);
+        }
+        cJSON_Delete(j);
     } else if (s.resp.status != 200 || (s.resp.body.data && strstr(s.resp.body.data, "\"ok\":false"))) {
         ESP_LOGW(TAG, "command %s refused: HTTP %d %s", path, s.resp.status, s.resp.body.data ? s.resp.body.data : "");
     } else {
@@ -356,10 +398,15 @@ static void drain_commands(void)
     }
 }
 
+static int64_t now_ms(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
 static void poll_task(void *arg)
 {
     (void)arg;
-    uint32_t wait_ms = 0;
+    int64_t next_poll = 0;                              /* when the next /now-playing poll is due */
     for (;;) {
         if (!wifi_mgr_is_connected()) {
             emit_status(PC_MEDIA_WAITING_NETWORK, "");
@@ -375,13 +422,19 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
-        cmd_msg_t m;
-        if (xQueueReceive(s.q, &m, pdMS_TO_TICKS(wait_ms)) == pdTRUE) {
-            do_command(&m);
-            wait_ms = POLL_AFTER_CMD_MS;
-        } else {
+        int64_t now = now_ms();
+        if (now >= next_poll) {                         /* a poll is due: it goes first, even if commands are waiting */
             bool ok = poll_once();
-            wait_ms = ok ? POLL_MS : (s.failures >= FAILS_BEFORE_LOST ? POLL_FAILING_MS : POLL_MS);
+            next_poll = now_ms() + (ok ? POLL_MS : (s.failures >= FAILS_BEFORE_LOST ? POLL_FAILING_MS : POLL_MS));
+            continue;
+        }
+        cmd_msg_t m;
+        if (xQueueReceive(s.q, &m, pdMS_TO_TICKS(next_poll - now)) == pdTRUE) {
+            do_command(&m);
+            int64_t soon = now_ms() + POLL_AFTER_CMD_MS;    /* look at the effect shortly, but never starve the poll */
+            if (soon < next_poll) {
+                next_poll = soon;
+            }
         }
     }
 }
@@ -402,10 +455,9 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     pc_resp_init(&s.resp, 16 * 1024);
     pc_resp_init(&s.art, ART_MAX_BYTES);
     s.port = cfg->port ? cfg->port : PC_MEDIA_DEFAULT_PORT;
-    s.art_size = cfg->art_size ? cfg->art_size : 300;
-    if (cfg->cover.size) {
-        pc_art_set_cover_rect(cfg->cover.x, cfg->cover.y, cfg->cover.size, cfg->cover.size);
-    }
+    s.art_max_h = cfg->art_max_h ? cfg->art_max_h : 300;
+    s.art_max_w = cfg->art_max_w ? cfg->art_max_w : s.art_max_h;
+    pc_art_set_cover_area_fn(cfg->cover_area);
     if (cfg->static_host && cfg->static_host[0]) {
         strlcpy(s.host, cfg->static_host, sizeof s.host);
         s.host_valid = true;
@@ -426,6 +478,9 @@ void pc_media_command(pc_media_cmd_t cmd, uint32_t arg)
 {
     if (!s.q) {
         return;
+    }
+    if ((cmd == PC_MEDIA_CMD_VOLUME_UP || cmd == PC_MEDIA_CMD_VOLUME_DOWN) && uxQueueMessagesWaiting(s.q) >= 2) {
+        return;                                         /* a held key must not build up a backlog: skip, the next repeat follows */
     }
     cmd_msg_t m = { cmd, arg };
     xQueueSend(s.q, &m, 0);

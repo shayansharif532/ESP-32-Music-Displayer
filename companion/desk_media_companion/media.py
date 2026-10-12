@@ -8,13 +8,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
-import io
 import logging
 import threading
 import time
 from typing import Any, Optional
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image
+from . import artwork as art_tools
+from . import volume as app_volume
 from winrt.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
@@ -36,7 +37,6 @@ SNAPSHOT_TTL_S = 0.25          # several clients polling at once share one WinRT
 ART_RETRY_INTERVAL_S = 1.5     # apps often publish the thumbnail a moment after the title
 ART_MAX_TRIES = 8
 ART_DEFAULT_SIZE = 300
-ART_BG = (16, 16, 22)          # same dark tone as the device UI, used for letterboxing
 CONTROL_TIMEOUT_S = 4.0
 
 
@@ -53,15 +53,16 @@ class MediaMonitor:
         self._snap_at = 0.0
         # artwork state (only touched on the loop thread, except reads under _art_lock)
         self._art_lock = threading.Lock()
-        self._art_raw: Optional[bytes] = None
+        self._art_img: Optional[Image.Image] = None     # the artwork itself (app logo / letterbox already removed)
         self._art_id = ""
-        self._art_cache: dict[int, bytes] = {}
+        self._art_cache: dict[tuple[int, Optional[int]], bytes] = {}
         self._track_key = ""
         self._art_tries = 0
         self._art_last_try = 0.0
         self._seq = 0
         self._last_sig = ""
         self._last_playing_app = ""      # when everything is paused, stay on the app that was playing last
+        self.prefer_app = ""             # dev only: always show this app's session when it exists (e.g. the fake test session)
         self._debug_lock = threading.Lock()
         self._debug_request = ""          # dev tools: one-shot request handed to the display with the next /now-playing
 
@@ -99,19 +100,25 @@ class MediaMonitor:
             action, self._debug_request = self._debug_request, ""
         return action
 
-    def artwork(self, size: int = ART_DEFAULT_SIZE) -> Optional[tuple[str, bytes]]:
-        """(art_id, baseline JPEG bytes at size x size) for the current track, or None."""
+    def artwork(self, size: int = ART_DEFAULT_SIZE, max_w: Optional[int] = None) -> Optional[tuple[str, bytes]]:
+        """(art_id, baseline JPEG bytes) for the current track, or None.
+
+        Without max_w: a size x size square (legacy). With max_w: the artwork keeps its aspect ratio inside a max_w x size box
+        (square art -> size x size, 16:9 art -> a landscape card), never stretched."""
         size = max(64, min(int(size), 640))
+        max_w = None if max_w is None else max(size, min(int(max_w), 960))
+        key = (size, max_w)
         with self._art_lock:
-            raw, art_id = self._art_raw, self._art_id
-            cached = self._art_cache.get(size)
-        if not raw:
+            img, art_id = self._art_img, self._art_id
+            cached = self._art_cache.get(key)
+            img = img.copy() if (img is not None and cached is None) else img
+        if img is None:
             return None
         if cached is None:
-            cached = _render_square_jpeg(raw, size)
+            cached = art_tools.render_jpeg(img, size, max_w)
             with self._art_lock:
                 if art_id == self._art_id:
-                    self._art_cache[size] = cached
+                    self._art_cache[key] = cached
         return art_id, cached
 
     def control(self, action: str, position_ms: Optional[int] = None) -> dict[str, Any]:
@@ -122,6 +129,40 @@ class MediaMonitor:
             result = {"ok": False, "action": action, "error": str(exc)[:120]}
         self._snap = None                             # next poll must see the effect
         return result
+
+    def volume(self, action: str, step: int = app_volume.STEP_DEFAULT, level: Optional[int] = None,
+               app: str = "") -> dict[str, Any]:
+        """Per-application volume of the app whose media session is shown on the display (NOT the Windows master volume).
+        action: "get" | "volume-up" | "volume-down" | "volume-set" (level 0..100).
+        `app` is the app id the display says it is showing; it is honoured only if that app really has a media session right
+        now, so the volume always follows what is on the screen, and nothing but media apps can be addressed."""
+        try:
+            app = self._call(self._resolve_app(app), CONTROL_TIMEOUT_S)
+        except Exception as exc:
+            log.warning("volume %s: cannot read the media session: %s", action, exc)
+            return {"ok": False, "action": action, "error": str(exc)[:120], "volume": None}
+        if not app:
+            return {"ok": False, "action": action, "error": "no media session", "volume": None}
+        step = max(1, min(int(step), 50))
+        if action == "volume-up":
+            result = app_volume.change_volume(app, delta=step)
+        elif action == "volume-down":
+            result = app_volume.change_volume(app, delta=-step)
+        elif action == "volume-set" and level is not None:
+            result = app_volume.change_volume(app, level=level)
+        else:
+            result = app_volume.get_volume(app)
+        result["action"] = action
+        return result
+
+    async def _resolve_app(self, wanted: str) -> str:
+        if wanted:
+            mgr = await self._get_manager()
+            for session in mgr.get_sessions():
+                if (session.source_app_user_model_id or "").lower() == wanted.lower():
+                    return session.source_app_user_model_id
+        selected = await self._select()               # otherwise: the same session the display shows and the buttons control
+        return (selected[0].source_app_user_model_id or "") if selected else ""
 
     # ---- session selection ----------------------------------------------------------------------
     async def _get_manager(self):
@@ -152,6 +193,11 @@ class MediaMonitor:
         def add(s) -> None:
             if s is not None and all(s.source_app_user_model_id != o.source_app_user_model_id for o in ordered):
                 ordered.append(s)
+
+        if self.prefer_app:                          # development only (--prefer-app): pin the display to a test session
+            for s in sessions:
+                if s.source_app_user_model_id.lower() == self.prefer_app.lower():
+                    add(s)
 
         if current is not None and self._status(current) == PlaybackStatus.PLAYING:
             add(current)
@@ -250,7 +296,7 @@ class MediaMonitor:
             self._seq += 1
             log.info("no media session")
         with self._art_lock:
-            self._art_raw, self._art_id, self._art_cache = None, "", {}
+            self._art_img, self._art_id, self._art_cache = None, "", {}
         self._track_key = ""
         return {"ok": True, "version": 1, "has_session": False, "state": "none", "playing": False,
                 "title": "", "artist": "", "album": "", "position_ms": 0, "duration_ms": 0,
@@ -264,7 +310,7 @@ class MediaMonitor:
             self._art_tries = 0
             self._art_last_try = 0.0
             with self._art_lock:
-                self._art_raw, self._art_id, self._art_cache = None, "", {}
+                self._art_img, self._art_id, self._art_cache = None, "", {}
         if self._art_id or self._art_tries >= ART_MAX_TRIES:
             return
         thumb = props.thumbnail
@@ -285,14 +331,15 @@ class MediaMonitor:
             data = bytearray(size)
             reader.read_bytes(data)
             raw = bytes(data)
-            Image.open(io.BytesIO(raw)).verify()      # must be a decodable image
+            image, notes = art_tools.clean(art_tools.decode(raw))      # must be decodable; strips app logos / letterboxing
         except Exception as exc:
             log.debug("thumbnail read failed (try %d): %s", self._art_tries, exc)
             return
         art_id = hashlib.sha1(raw).hexdigest()[:10]
         with self._art_lock:
-            self._art_raw, self._art_id, self._art_cache = raw, art_id, {}
-        log.info("artwork loaded: %d bytes, id %s", len(raw), art_id)
+            self._art_img, self._art_id, self._art_cache = image, art_id, {}
+        log.info("artwork loaded: %d bytes -> %dx%d, id %s%s", len(raw), image.width, image.height, art_id,
+                 ("; " + "; ".join(notes)) if notes else "")
 
     # ---- controls -------------------------------------------------------------------------------
     async def _control(self, action: str, position_ms: Optional[int]) -> dict[str, Any]:
@@ -334,31 +381,3 @@ class MediaMonitor:
         return {"ok": False, "action": action, "error": "no media session"}
 
 
-def _render_square_jpeg(raw: bytes, size: int) -> bytes:
-    """Any image -> size x size baseline JPEG. Near-square art is centre-cropped; wide/tall art (e.g. 16:9 video
-    thumbnails) is letterboxed so nothing is cut off."""
-    img = Image.open(io.BytesIO(raw))
-    img = ImageOps.exif_transpose(img)
-    if img.mode in ("RGBA", "LA", "P"):
-        img = img.convert("RGBA")
-        bg = Image.new("RGBA", img.size, ART_BG + (255,))
-        bg.alpha_composite(img)
-        img = bg
-    img = img.convert("RGB")
-    w, h = img.size
-    ratio = w / h if h else 1.0
-    if 0.88 <= ratio <= 1.14:
-        img = ImageOps.fit(img, (size, size), Image.LANCZOS)
-    else:
-        # Wide / tall art (e.g. a 16:9 video thumbnail): keep all of it, sharp, in the middle, and fill the rest of the square
-        # with a blurred, dimmed copy of itself instead of dead black bars - no empty borders around the cover.
-        fitted = ImageOps.contain(img, (size, size), Image.LANCZOS)
-        canvas = ImageOps.fit(img, (size, size), Image.BILINEAR)
-        canvas = canvas.filter(ImageFilter.GaussianBlur(max(4, size // 14)))
-        canvas = ImageEnhance.Brightness(canvas).enhance(0.6)
-        canvas.paste(fitted, ((size - fitted.width) // 2, (size - fitted.height) // 2))
-        img = canvas
-    out = io.BytesIO()
-    # baseline (non-progressive) 4:2:0 JPEG: what the ESP32's TJpgDec decoder handles
-    img.save(out, format="JPEG", quality=88, optimize=False, progressive=False, subsampling=2)
-    return out.getvalue()
