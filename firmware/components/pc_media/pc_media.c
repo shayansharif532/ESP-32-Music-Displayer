@@ -102,6 +102,12 @@ static uint32_t jnum(const cJSON *obj, const char *key)
     return (cJSON_IsNumber(v) && v->valuedouble > 0) ? (uint32_t)v->valuedouble : 0;
 }
 
+static uint8_t jnum8(const cJSON *obj, const char *key)
+{
+    uint32_t v = jnum(obj, key);
+    return v > 255 ? 255 : (uint8_t)v;
+}
+
 static bool jbool(const cJSON *obj, const char *key)
 {
     return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj, key));
@@ -249,6 +255,48 @@ static void update_art(void)
 
 /* ---- polling -------------------------------------------------------------------------------------- */
 
+/* A /now-playing JSON object -> state. Also used for the "now" object inside the answer to a source switch. */
+static void parse_state(const cJSON *root, pc_media_state_t *ns)
+{
+    memset(ns, 0, sizeof *ns);
+    ns->has_session = jbool(root, "has_session");
+    ns->playing = jbool(root, "playing");
+    jstr(root, "state", ns->state, sizeof ns->state);
+    jstr(root, "app", ns->app, sizeof ns->app);
+    jstr(root, "source", ns->source, sizeof ns->source);
+    ns->sources = jnum8(root, "sources");
+    ns->source_index = jnum8(root, "source_index");
+    jstr(root, "title", ns->title, sizeof ns->title);
+    jstr(root, "artist", ns->artist, sizeof ns->artist);
+    jstr(root, "album", ns->album, sizeof ns->album);
+    jstr(root, "track_id", ns->track_id, sizeof ns->track_id);
+    jstr(root, "art_id", ns->art_id, sizeof ns->art_id);
+    ns->position_ms = jnum(root, "position_ms");
+    ns->duration_ms = jnum(root, "duration_ms");
+    ns->can_play = jbool(root, "can_play");
+    ns->can_pause = jbool(root, "can_pause");
+    ns->can_next = jbool(root, "can_next");
+    ns->can_prev = jbool(root, "can_prev");
+    ns->can_seek = jbool(root, "can_seek");
+}
+
+/* Makes `ns` the current state: status line and UI callback. (The artwork download follows separately: it takes a moment, and
+ * the text should not wait for it.) */
+static void apply_state(const pc_media_state_t *ns)
+{
+    if (ns->has_session && strcmp(ns->track_id, s.st.track_id) != 0) {
+        ESP_LOGI(TAG, "now %s [%s]: \"%s\" - %s (%u ms) source %u/%u", ns->playing ? "playing" : ns->state, ns->app, ns->title,
+                 ns->artist, (unsigned)ns->duration_ms, (unsigned)ns->source_index, (unsigned)ns->sources);
+    }
+    s.failures = 0;
+    s.st = *ns;
+    emit_status(ns->has_session ? PC_MEDIA_CONNECTED : PC_MEDIA_NO_SESSION,
+                ns->has_session ? (ns->source[0] ? ns->source : ns->app) : "");
+    if (s.cbs.on_state) {
+        s.cbs.on_state(&s.st, s.cbs.ctx);
+    }
+}
+
 static bool poll_once(void)
 {
     char host[16];
@@ -270,37 +318,12 @@ static bool poll_once(void)
     }
 
     pc_media_state_t ns;
-    memset(&ns, 0, sizeof ns);
-    ns.has_session = jbool(root, "has_session");
-    ns.playing = jbool(root, "playing");
-    jstr(root, "state", ns.state, sizeof ns.state);
-    jstr(root, "app", ns.app, sizeof ns.app);
-    jstr(root, "title", ns.title, sizeof ns.title);
-    jstr(root, "artist", ns.artist, sizeof ns.artist);
-    jstr(root, "album", ns.album, sizeof ns.album);
-    jstr(root, "track_id", ns.track_id, sizeof ns.track_id);
-    jstr(root, "art_id", ns.art_id, sizeof ns.art_id);
-    ns.position_ms = jnum(root, "position_ms");
-    ns.duration_ms = jnum(root, "duration_ms");
-    ns.can_play = jbool(root, "can_play");
-    ns.can_pause = jbool(root, "can_pause");
-    ns.can_next = jbool(root, "can_next");
-    ns.can_prev = jbool(root, "can_prev");
-    ns.can_seek = jbool(root, "can_seek");
+    parse_state(root, &ns);
     char dbg[24];
     jstr(root, "debug", dbg, sizeof dbg);
     cJSON_Delete(root);
 
-    if (ns.has_session && strcmp(ns.track_id, s.st.track_id) != 0) {
-        ESP_LOGI(TAG, "now %s [%s]: \"%s\" - %s (%u ms)", ns.playing ? "playing" : ns.state, ns.app, ns.title, ns.artist,
-                 (unsigned)ns.duration_ms);
-    }
-    s.failures = 0;
-    s.st = ns;
-    emit_status(ns.has_session ? PC_MEDIA_CONNECTED : PC_MEDIA_NO_SESSION, ns.has_session ? ns.app : "");
-    if (s.cbs.on_state) {
-        s.cbs.on_state(&s.st, s.cbs.ctx);
-    }
+    apply_state(&ns);
     update_art();
     if (dbg[0] && s.cbs.on_debug) {
         s.cbs.on_debug(dbg, s.cbs.ctx);
@@ -328,16 +351,45 @@ static void url_encode(char *dst, size_t n, const char *src)
     dst[o] = '\0';
 }
 
+/* The answer to a source switch: {"ok":true,"changed":true,"source":"Chrome","index":1,"count":2,"now":{...}}. Applies the new
+ * session's state at once (no waiting for the next poll) and tells the UI which source it is now showing. */
+static void apply_source_answer(const char *path)
+{
+    cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
+    const cJSON *now = j ? cJSON_GetObjectItemCaseSensitive(j, "now") : NULL;
+    if (!j || !jbool(j, "ok") || !jbool(j, "changed") || !cJSON_IsObject(now)) {
+        ESP_LOGI(TAG, "command %s: nothing to switch", path);
+        cJSON_Delete(j);
+        return;
+    }
+    pc_media_state_t ns;
+    parse_state(now, &ns);
+    char name[sizeof ns.source];
+    jstr(j, "source", name, sizeof name);
+    int index = (int)jnum(j, "index"), count = (int)jnum(j, "count");
+    ESP_LOGI(TAG, "command %s -> source \"%s\" (%d of %d)", path, name, index, count);
+    cJSON_Delete(j);
+    apply_state(&ns);                                   /* new text, controls and progress now ... */
+    if (s.cbs.on_source) {
+        s.cbs.on_source(name, index, count, s.cbs.ctx);  /* ... the source pill with them ... */
+    }
+    update_art();                                       /* ... and the cover as soon as it has been downloaded */
+}
+
 static void do_command(const cmd_msg_t *m)
 {
-    char host[16], path[192];
+    char host[16], path[224];
     uint16_t port;
     if (!get_host(host, sizeof host, &port)) {
         return;
     }
+    /* Every command names the app the display is showing, so it goes to exactly that session even if the PC's own idea of the
+     * "current" session changed since the last poll (the PC refuses it when that session no longer exists). */
+    char app[sizeof s.st.app * 3 + 1];
+    url_encode(app, sizeof app, s.st.has_session ? s.st.app : "");
     switch (m->cmd) {
     case PC_MEDIA_CMD_PLAY_PAUSE:
-        strlcpy(path, "/control/playpause", sizeof path);
+        snprintf(path, sizeof path, "/control/playpause?app=%s", app);
         if (s.st.has_session) {                         /* optimistic: flip the icon now, the next poll confirms */
             s.st.playing = !s.st.playing;
             if (s.cbs.on_state) {
@@ -346,34 +398,36 @@ static void do_command(const cmd_msg_t *m)
         }
         break;
     case PC_MEDIA_CMD_NEXT:
-        strlcpy(path, "/control/next", sizeof path);
+        snprintf(path, sizeof path, "/control/next?app=%s", app);
         break;
     case PC_MEDIA_CMD_PREV:
-        strlcpy(path, "/control/previous", sizeof path);
+        snprintf(path, sizeof path, "/control/previous?app=%s", app);
         break;
     case PC_MEDIA_CMD_SEEK:
-        snprintf(path, sizeof path, "/control/seek?position_ms=%u", (unsigned)m->arg);
+        snprintf(path, sizeof path, "/control/seek?position_ms=%u&app=%s", (unsigned)m->arg, app);
         break;
     case PC_MEDIA_CMD_VOLUME_UP:
-    case PC_MEDIA_CMD_VOLUME_DOWN: {
-        /* Name the app the display is showing, so the volume goes to exactly that app even if the PC's own idea of the
-         * "current" session changed since the last poll. */
-        char app[sizeof s.st.app * 3 + 1];
-        url_encode(app, sizeof app, s.st.has_session ? s.st.app : "");
+    case PC_MEDIA_CMD_VOLUME_DOWN:
         snprintf(path, sizeof path, "/control/volume-%s?step=%u&app=%s", m->cmd == PC_MEDIA_CMD_VOLUME_UP ? "up" : "down",
                  (unsigned)(m->arg ? m->arg : 5), app);
         break;
-    }
+    case PC_MEDIA_CMD_SOURCE_NEXT:
+    case PC_MEDIA_CMD_SOURCE_PREV:
+        snprintf(path, sizeof path, "/control/source-%s?from=%s", m->cmd == PC_MEDIA_CMD_SOURCE_NEXT ? "next" : "prev", app);
+        break;
     default:
         return;
     }
     const bool is_volume = (m->cmd == PC_MEDIA_CMD_VOLUME_UP || m->cmd == PC_MEDIA_CMD_VOLUME_DOWN);
+    const bool is_source = (m->cmd == PC_MEDIA_CMD_SOURCE_NEXT || m->cmd == PC_MEDIA_CMD_SOURCE_PREV);
     esp_err_t err = pc_http_request(host, port, path, true, HTTP_TIMEOUT_MS, &s.resp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "command %s failed: %s", path, esp_err_to_name(err));
         if (is_volume && s.cbs.on_volume) {
             s.cbs.on_volume(-2, false, s.cbs.ctx);             /* the PC did not answer */
         }
+    } else if (is_source) {
+        apply_source_answer(path);
     } else if (is_volume) {
         /* {"ok":true,"volume":65,"muted":false,...} or {"ok":false,"error":"no audio session found for ..."} */
         cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
@@ -481,6 +535,9 @@ void pc_media_command(pc_media_cmd_t cmd, uint32_t arg)
     }
     if ((cmd == PC_MEDIA_CMD_VOLUME_UP || cmd == PC_MEDIA_CMD_VOLUME_DOWN) && uxQueueMessagesWaiting(s.q) >= 2) {
         return;                                         /* a held key must not build up a backlog: skip, the next repeat follows */
+    }
+    if ((cmd == PC_MEDIA_CMD_SOURCE_NEXT || cmd == PC_MEDIA_CMD_SOURCE_PREV) && uxQueueMessagesWaiting(s.q) >= 3) {
+        return;                                         /* swipes in a flurry: each one is relative to the source on screen */
     }
     cmd_msg_t m = { cmd, arg };
     xQueueSend(s.q, &m, 0);

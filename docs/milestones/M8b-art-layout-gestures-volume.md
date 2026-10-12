@@ -59,6 +59,7 @@ The source app stays as a tiny 12 px label at the top of the screen ("Spotify", 
 ## 3. Swipe gestures
 
 Horizontal swipe on the Now Playing screen: **swipe right = next track, swipe left = previous track** (as requested, regardless of convention).
+*(Superseded by Milestone 8c, at the owner's request: left = next, right = previous, plus vertical swipes that switch the media source - see `M8c-session-switching.md`.)*
 
 * Rules (`ui.c`, constants `SWIPE_*`): >= 72 px horizontal travel, vertical drift never above 44 px and at most half the horizontal travel, within 1 s. A tap moves < 10 px.
 * On success the touch is consumed (`lv_indev_wait_release`), so the finger's start object does not also get a click; a press that travelled more than 24 px is never treated as a tap

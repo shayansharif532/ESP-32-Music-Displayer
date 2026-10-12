@@ -4,8 +4,10 @@ with --dev-tools) for a while, so a serial log captured at the same time can be 
 
     tools\\venv\\Scripts\\python.exe tools\\soak_gestures.py --seconds 300 [--companion http://127.0.0.1:8765]
 
-Refuses to run unless the displayed session is the silent fake test session (python.exe): every action here can send next /
-previous / seek / play-pause / volume commands.
+Needs the silent fake test session running (companion\\tools\\fake_media_session.py --silent-audio). Every action except the two
+vertical swipes can send next / previous / seek / play-pause / volume commands, so they only run while the fake session (python.exe)
+is the one on screen. The vertical swipes just switch the shown source: when they have moved the display onto a real session
+(Spotify, Chrome ...) the soak keeps swiping - selection only, nothing is played or changed - until the fake session is back.
 """
 import argparse
 import json
@@ -13,10 +15,11 @@ import random
 import time
 import urllib.request
 
+FAKE = "python.exe"
+SELECTION_ONLY = {"swipe_up", "swipe_down"}
 ACTIONS = [
-    ("swipe_right", 4), ("swipe_left", 4), ("swipe_up", 2), ("swipe_diag", 2), ("swipe_bar", 2), ("swipe_text", 3),
-    ("touch_cover", 3), ("touch_play", 2), ("key_up", 3), ("key_down", 3), ("keyhold_down", 1), ("keyhold_up", 1),
-    ("overlay_none_shot_off", 0),
+    ("swipe_right", 4), ("swipe_left", 4), ("swipe_up", 4), ("swipe_down", 3), ("swipe_diag", 2), ("swipe_bar", 2), ("swipe_bar_v", 2),
+    ("swipe_text", 3), ("touch_cover", 3), ("touch_play", 2), ("key_up", 3), ("key_down", 3), ("keyhold_down", 1), ("keyhold_up", 1),
 ]
 
 
@@ -36,18 +39,29 @@ def main() -> None:
     pool = [name for name, weight in ACTIONS for _ in range(weight)]
     end = time.time() + args.seconds
     done: dict[str, int] = {}
-    last_check = 0.0
+    returned = 0
+    last_selection = 0.0
     while time.time() < end:
-        if time.time() - last_check > 20:
-            app = call(args.companion, "/now-playing").get("app", "")
-            if app != "python.exe":
-                print(f"stopping: the displayed session is {app!r}, not the fake test session")
+        app = call(args.companion, "/now-playing").get("app", "")
+        if app != FAKE:
+            n = call(args.companion, "/now-playing").get("sources", 0)
+            if n < 2:
+                print(f"stopping: the fake session is not on screen ({app!r}) and there is no other source to swipe to")
                 break
-            last_check = time.time()
+            call(args.companion, "/debug/swipe_up", post=True)           # selection only: walk back to the fake session
+            done["swipe_up(return)"] = done.get("swipe_up(return)", 0) + 1
+            last_selection = time.time()
+            time.sleep(3.2)
+            returned += 1
+            continue
+        if time.time() - last_selection < 3.0:                            # let the display catch up with the new source first
+            time.sleep(3.0)
         action = rnd.choice(pool)
         call(args.companion, f"/debug/{action}", post=True)
         done[action] = done.get(action, 0) + 1
-        time.sleep(rnd.uniform(1.4, 2.6) + (3.2 if action.startswith("keyhold") else 0))
+        if action in SELECTION_ONLY:
+            last_selection = time.time()
+        time.sleep(rnd.uniform(1.6, 2.8) + (3.2 if action.startswith("keyhold") else 0))
     print("actions sent:", sum(done.values()), done)
 
 

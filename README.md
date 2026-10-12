@@ -28,7 +28,8 @@ obsolete; its code is parked in [`legacy/`](legacy/README.md).)
 | Control | What it does |
 |---|---|
 | tap play / previous / next | transport controls of the session being shown |
-| **swipe right / swipe left** on the screen | **next / previous track** (needs >= 72 px of mostly horizontal travel; does nothing if the app has no next / previous) |
+| **swipe left / swipe right** on the screen | **next / previous track** (needs >= 72 px of mostly horizontal travel; does nothing if the app has no next / previous) |
+| **swipe up / swipe down** on the screen | **next / previous media source**: switches the display (artwork, title, progress, play / pause, seek, volume) to another app's media session on the PC - Spotify, a YouTube tab in Chrome, ... - playing or paused; wraps around; the source's name shows for a second; does nothing with a single source |
 | drag on the thin progress line | seek |
 | tap the cover | full-screen cover (tap again to return) |
 | **upper side button (PWR)** / **lower side button (BOOT)** | **volume up / down of the app being shown** (Windows per-app volume, not the PC's master volume), 5 % per press, hold to repeat (max 3 s); a "Volume 65%" pill shows for a second |
@@ -49,13 +50,13 @@ Chrome / Edge change the volume of the whole browser (all tabs share one audio s
 |---|---|
 | Orientation / rules for Claude Code sessions | [`CLAUDE.md`](CLAUDE.md) |
 | **Architecture + companion HTTP protocol** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md) |
+| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md), [M8c](docs/milestones/M8c-session-switching.md) |
 | Hardware facts, verified pin map, sources | [`docs/HARDWARE.md`](docs/HARDWARE.md) |
 | Decisions: framework (ADR-001), companion architecture (ADR-003), obsolete Spotify rules (ADR-002) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | **Windows companion app** | [`companion/`](companion/) |
 | Obsolete Spotify client (kept, not built) | [`legacy/`](legacy/README.md) |
 | Firmware (ESP-IDF project) and its provenance | [`firmware/`](firmware/), [`firmware/NOTICE.md`](firmware/NOTICE.md) |
-| Helper scripts | [`tools/`](tools/): `idf.ps1`, `find-board.ps1`, `serial_capture.py`, `set-dev-secrets.ps1`, `analyze_flash_dump.py`, dev-only `screenshot.py` (real display -> PNG, scripted swipes), `contact_sheet.py`, `soak_gestures.py` |
+| Helper scripts | [`tools/`](tools/): `idf.ps1`, `find-board.ps1`, `serial_capture.py`, `set-dev-secrets.ps1`, `analyze_flash_dump.py`, dev-only `screenshot.py` (real display -> PNG, scripted swipes), `contact_sheet.py`, `soak_gestures.py`, `session_test.py` (hardware-in-the-loop test of gestures, source switching and per-app volume) |
 | Factory-backup manifest (hashes, layout, restore steps) | [`backup/factory/MANIFEST.md`](backup/factory/MANIFEST.md) |
 | Waveshare reference downloads (git-ignored, re-fetchable) | `docs/waveshare/` |
 
@@ -192,6 +193,7 @@ stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milest
 | — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | **passed by log evidence** (owner's visual confirmation of the screen still to be given) |
 | 8 | **Main player visual redesign** (big frameless cover, artwork-driven blurred background, clean foreground) | **done** - see [M8 doc](docs/milestones/M8-player-redesign.md) |
 | 8b | **Refinement pass**: widescreen art as a landscape card, Spotify logo removed, swipe gestures (right = next, left = previous), per-app Windows volume, side buttons = volume up / down | **done** - see [M8b doc](docs/milestones/M8b-art-layout-gestures-volume.md) |
+| 8c | **Media-source switching**: horizontal swipes reversed (left = next, right = previous), vertical swipes switch between the PC's media sessions (playing or paused), every command targets the session on screen, sharper Chrome / YouTube thumbnails (PC-side) | **done** - see [M8c doc](docs/milestones/M8c-session-switching.md) |
 | 9 | Cyberpunk idle screen (nothing playing) | next |
 | 10 | Full-screen album-art polish | |
 | 11 | First-run Wi-Fi setup | |

@@ -8,10 +8,17 @@
                                    image (Spotify) and black letterbox bars are removed first (see artwork.py).
     POST /control/playpause        also: /control/play  /control/pause  /control/next  /control/previous
     POST /control/seek?position_ms=N
+                                   every control takes an optional  &app=Spotify.exe  = the app the display shows: the command
+                                   then goes to exactly that session and is refused if it is gone (never to another session)
     GET  /volume                   volume of the app that is displayed (its own Windows audio-session volume, NOT the master volume)
     POST /control/volume-up[?step=5][&app=Spotify.exe]   also: /control/volume-down   POST /volume?level=0..100
-                                   (app = the app the display shows; honoured only if that app has a media session)
                                    -> {"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}
+    POST /control/source-next[?from=Spotify.exe]   also: /control/source-prev   (vertical swipe: switch the display to the next /
+                                   previous usable media session, wrapping around; pins the display to it. `from` = the app on
+                                   screen. -> {"ok":true,"changed":true,"app":"chrome.exe","source":"Chrome","index":1,"count":2,
+                                   "now":{...the new /now-playing...}}; changed=false when there is only one source)
+    POST /control/source-auto      back to automatic (follow the best session)
+    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|pinned
     GET  /health
 
 Safety rails: only private/loopback clients are served; the Host header must be an IP address (blocks DNS
@@ -34,6 +41,7 @@ log = logging.getLogger("http")
 
 CONTROL_ACTIONS = {"playpause", "play", "pause", "next", "previous", "seek"}
 VOLUME_ACTIONS = {"volume-up", "volume-down"}
+SOURCE_ACTIONS = {"source-next", "source-prev", "source-auto"}
 _HOST_IP = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^\[[0-9a-fA-F:]+\](:\d+)?$|^localhost(:\d+)?$")
 
 
@@ -46,8 +54,9 @@ def _client_allowed(addr: str) -> bool:
 
 
 DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
-                 "swipe_right", "swipe_left", "swipe_up", "swipe_diag", "swipe_bar", "swipe_text", "touch_cover", "touch_play",
-                 "key_up", "key_down", "keyhold_up", "keyhold_down", "swipe_right_shot", "swipe_left_shot", "key_up_shot", "key_down_shot",
+                 "swipe_right", "swipe_left", "swipe_up", "swipe_down", "swipe_diag", "swipe_bar", "swipe_bar_v", "swipe_text",
+                 "touch_cover", "touch_play", "key_up", "key_down", "keyhold_up", "keyhold_down",
+                 "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                  "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"}
 
 
@@ -119,7 +128,9 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                 else:
                     self._send(200, jpeg, "image/jpeg", {"ETag": etag, "X-Art-Id": art_id})
             elif url.path == "/volume":
-                self._json(200, monitor.volume("get"))
+                self._json(200, monitor.volume("get", app=parse_qs(url.query).get("app", [""])[0][:96]))
+            elif url.path == "/sources":
+                self._json(200, monitor.list_sources())
             elif url.path == "/health":
                 self._json(200, {"ok": True, "service": "desk-media-companion", "version": __version__})
             else:
@@ -149,16 +160,23 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
                 except ValueError:
                     self._json(400, {"ok": False, "error": "level (0..100) required"})
                     return
-                self._json(200, monitor.volume("volume-set", level=level))
+                self._json(200, monitor.volume("volume-set", level=level, app=parse_qs(url.query).get("app", [""])[0][:96]))
                 return
             m = re.fullmatch(r"/control/([\w-]+)", url.path)
+            q = parse_qs(url.query)
+            shown_app = q.get("app", q.get("from", [""]))[0][:96]       # the app the display says it is showing
             if m and m.group(1) in VOLUME_ACTIONS:           # relative: the displayed app's own volume, +/- step percent
-                q = parse_qs(url.query)
                 try:
                     step = int(q.get("step", ["5"])[0])
                 except ValueError:
                     step = 5
-                self._json(200, monitor.volume(m.group(1), step=step, app=q.get("app", [""])[0][:96]))
+                self._json(200, monitor.volume(m.group(1), step=step, app=shown_app))
+                return
+            if m and m.group(1) in SOURCE_ACTIONS:           # vertical swipe: next / previous media source (session)
+                if m.group(1) == "source-auto":
+                    self._json(200, monitor.auto_source())
+                else:
+                    self._json(200, monitor.switch_source(1 if m.group(1) == "source-next" else -1, shown_app))
                 return
             if not m or m.group(1) not in CONTROL_ACTIONS:
                 self._json(404, {"ok": False, "error": "unknown control"})
@@ -167,11 +185,11 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False) -> Th
             position = None
             if action == "seek":
                 try:
-                    position = int(parse_qs(url.query).get("position_ms", [""])[0])
+                    position = int(q.get("position_ms", [""])[0])
                 except ValueError:
                     self._json(400, {"ok": False, "error": "position_ms required"})
                     return
-            self._json(200, monitor.control(action, position))
+            self._json(200, monitor.control(action, position, shown_app))
 
     class Server(ThreadingHTTPServer):
         daemon_threads = True

@@ -25,6 +25,8 @@ typedef enum {
     UI_CMD_PLAY_PAUSE,
     UI_CMD_NEXT,
     UI_CMD_SEEK,            /* arg = target position in ms */
+    UI_CMD_SOURCE_NEXT,     /* vertical swipe up:   switch to the next media source (app / session) on the PC */
+    UI_CMD_SOURCE_PREV,     /* vertical swipe down: switch to the previous one */
 } ui_cmd_t;
 
 typedef void (*ui_cmd_cb_t)(ui_cmd_t cmd, uint32_t arg, void *ctx);
@@ -61,6 +63,13 @@ void ui_set_status(ui_status_level_t level, const char *text);
 /* Brief translucent "Volume 65%" pill (about one second, then it fades). percent < 0: the displayed app has no volume to
  * control ("No volume control"), -2: the PC did not answer; muted shows "Muted". No permanent screen space is used. */
 void ui_show_volume(int percent, bool muted);
+
+/* How many media sources the PC currently offers (a vertical swipe only does something when there are at least two). */
+void ui_set_sources(int count);
+
+/* Brief translucent pill with the name of the source the display just switched to (and its place among the `count` sources, as
+ * small dots). Shares the pill slot with the volume overlay; fades after about a second. */
+void ui_show_source(const char *name, int index, int count);
 
 /* Monotonic count of touch presses seen by the UI (for soak-test logging). */
 uint32_t ui_touch_count(void);

@@ -54,6 +54,12 @@ New-NetFirewallRule -DisplayName "Desk Media Companion" -Direction Inbound -Prot
 * **Per-application volume** (`desk_media_companion/volume.py`): `GET /volume`, `POST /control/volume-up|volume-down[?step=5]`, `POST /volume?level=N` change the **Windows audio-session volume of the displayed app**
   (the same slider as the Volume Mixer) - never the master volume (`tools/check_master_volume.py` proves it). The app's audio sessions are found by process name on every playback device. Chrome / Edge: all tabs share one audio
   process, so the whole browser changes; Firefox cannot be matched. Spotify's own in-app volume multiplies with the Windows one.
+* **Media sources** (`desk_media_companion/sources.py` = the model, `media.py` = the live sessions): the display can switch between every usable Windows media session (playing **and paused** ones that have a title or
+  artist; dead sessions are left out). `POST /control/source-next[?from=Spotify.exe]` / `source-prev` (a vertical swipe on the display) pin the display to the next / previous source in a fixed, wrapping order
+  (alphabetical by app name) and answer with the new `/now-playing`; `GET /sources` lists them; `POST /control/source-auto` returns to automatic (follow the best session). Once pinned, the display stays on that session
+  while it exists - another app becoming active does not take over - and falls back to automatic when it disappears. **Every control / volume request may carry `&app=<app id>`** (the display always does): the command then goes to
+  exactly that session and is refused (`"that media session is gone"`) if it no longer exists, never to another one.
+  `tools/api_check.py` exercises this without touching playback; `tools/session_test.py` is the full hardware test.
 
 ## Test without any media app
 
@@ -68,7 +74,11 @@ curl -X POST -H "X-Desk-Client: test" http://127.0.0.1:8765/control/next
 
 ## Known limits
 
-* Session choice: a *playing* session wins over a paused one; otherwise the system's current session. Pausing one app while another plays moves the display to the playing one.
+* Session choice (automatic mode): a *playing* session wins over a paused one; otherwise the app that played last, then the system's current session. Pausing one app while another plays moves the display to the playing one.
+  After a vertical swipe the choice is the user's (pinned) and does not move - see "Media sources" above. Two sessions with the same app id (e.g. two browser profiles reported under one id) appear as one source.
+* Chrome / Edge artwork is at most ~150 px (Chromium requests it that way: `kDesiredImageSize = 150`); the companion enlarges it with a restrained edge-only sharpener (`artwork.enhance_upscale`), it cannot add detail.
+  YouTube Music "topic" videos are a square cover inside a 16:9 frame, so the real picture can be < 90 px. A real high-resolution source would need a browser extension (see docs/milestones/M8c-session-switching.md); not built.
+* A paused browser tab may hold no audio session, so the side-button volume shows "No volume control" until it plays again.
 * Position is extrapolated from the session's timeline; apps that report a stale timeline can show a small drift until they update it.
 * Some sources have no artwork or no duration (live streams): the display shows a placeholder / an empty bar.
 * Plain HTTP on the LAN, unauthenticated (fenced: LAN-only clients, IP-literal Host header, `X-Desk-Client` required on POSTs). A pairing token comes with Milestone 11.

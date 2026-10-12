@@ -239,12 +239,29 @@ After the owner reviewed M8 on the real display:
   Chromium hands Windows only ~150 px thumbnails, so cards are soft - a Windows limit.
 - **The Spotify logo is gone**: Windows gives a 300x300 RGBA composite (opaque 234x234 cover, transparent gap, logo). `artwork.split_composite` splits it structurally (alpha bands), never by a fixed crop; anything
   ambiguous is left untouched. Black letterbox bars are trimmed.
-- **Swipe gestures**: right = next track, left = previous (>= 72 px mostly horizontal, < 1 s; consumed so nothing is clicked; never from the progress bar; no-op when the app has no next / previous).
+- **Swipe gestures**: >= 72 px mostly horizontal, < 1 s; consumed so nothing is clicked; never from the progress bar; no-op when the app has no next / previous. *(M8b had right = next; reversed in M8c: left = next, right = previous.)*
 - **Per-app volume** via Core Audio sessions (`companion/desk_media_companion/volume.py`): `GET /volume`, `POST /control/volume-up|volume-down[?step=5&app=...]`. Never the master volume (verified).
   Browsers: whole-browser volume (shared audio process); Firefox not matchable.
 - **Side buttons = volume**: PWR (upper) = up, BOOT (lower) = down (`firmware/components/side_keys`), 5 % steps, hold-repeat capped at 3 s, transient "Volume 65%" pill.
   **Do not hold PWR > ~4 s (the PMIC powers the board off). BOOT at power-up is the ROM download-mode gesture, so Milestone 11's "hold BOOT at power-up to wipe Wi-Fi" must become a long press while running.**
 - Rules learned: the display must name the app it shows in volume requests; never let a held key flood the command queue (poll is time-scheduled); overlays must be children of the screen (the screenshot tool does not render `lv_layer_top`).
+
+### Milestone 8c - Media-source switching (DONE 2026-10-12; evidence: `docs/milestones/M8c-session-switching.md`; ADR-005)
+
+Owner's second refinement request, after using M8b:
+
+- **Horizontal swipes reversed**: finger LEFT = next track, RIGHT = previous (same thresholds / safeguards; seek-bar swipes still only seek; tap on the cover still toggles full screen).
+- **Vertical swipes switch the media source**: finger UP = next, DOWN = previous source (= another app's Windows media session; playing **and paused** ones with a title / artist; dead sessions such as `PSExpressCore.exe`
+  are left out; fixed alphabetical ring that wraps; nothing happens with a single source). The selection lives in the companion (`desk_media_companion/sources.py` = pure model + 21 unit tests; `media.py` applies it):
+  **auto** follows the best session, a swipe **pins** the display to a session until that session disappears (another app becoming active does not take over). Feedback: a faint chevron disc + a translucent pill with the
+  source name and position dots (~1.1 s, shared with the volume pill); no permanent widgets.
+- **Every command names the session on screen** (`app=` on all `/control/*` and volume requests; `from=` on source switches). The companion sends it to exactly that session and refuses it if that session is gone - so controls,
+  seek, play/pause and the side-button volume always follow what is displayed, immediately after a switch. A paused source shows its artwork, title, timeline and the play icon; play resumes that session.
+- **Chrome / YouTube artwork**: investigated before accepting 150 px. GSMTC exposes one thumbnail stream and no URL / size variants; Windows passes an app's image through byte-identically (a 1280x720 PNG published by the fake
+  session came back unchanged); Chromium itself requests artwork at `kMinImageSize = 71` / `kDesiredImageSize = 150` (`system_media_controls_notifier.cc`). So **no higher-resolution image exists without a browser extension**.
+  PC-side up-scaling was improved (`artwork.enhance_upscale`: edge-only, halo-limited, strength ramps with the enlargement; Spotify-sized enlargements are bit-identical). An extension (reads the page's own MediaSession artwork list)
+  is documented as an option in the M8c doc, deliberately not built.
+- Rules learned: a dev action that only changes the *selection* (`swipe_up` / `swipe_down`) is safe on real sessions, everything else is guarded; end every test by `POST /control/source-auto` so the owner's display is not left pinned.
 
 ### Milestone 9 — Cyberpunk Idle Screen
 
@@ -379,7 +396,7 @@ companion/                      Windows companion (Python)
   desk_media_companion/         media.py (GSMTC), server.py (HTTP API), discovery.py (UDP beacon), autostart.py, __main__.py
   tools/fake_media_session.py   silent test media session (--art-dir, --silent-audio for volume tests)
   tools/dump_sessions.py        read-only dump of every media session + raw thumbnail (how the Spotify composite was found)
-  desk_media_companion/artwork.py  thumbnail clean-up + aspect-preserving rendering;  volume.py  per-app Core Audio volume
+  desk_media_companion/artwork.py  thumbnail clean-up + aspect-preserving rendering;  volume.py  per-app Core Audio volume;  sources.py  which sessions the display can switch between (pure model)
 firmware/
   main/                         main.c (glue), app_config.h, health.c, demo_player.c (UI-only demo)
   components/
@@ -558,7 +575,7 @@ Physical intervention may be required for BOOT/PWR operations. Tell the user exa
 
 ## Testing Philosophy
 
-**Seeing the real screen:** (since M8b also scripted input: `--do swipe_right|swipe_left|swipe_up|swipe_diag|swipe_bar|swipe_text|touch_cover|touch_play|key_up|key_down|keyhold_*|<action>_shot` drives a virtual finger through the real LVGL input path or simulates a side-button press; all of these are refused unless the active session is the fake test session. `companion --prefer-app python.exe` pins the display to the fake session for such tests - but NEVER pin or send commands while the owner is testing by hand: their key presses and swipes would hit the wrong app.) build with `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 build`, run the companion with `--dev-tools`, then `tools\venv\Scripts\python.exe tools\screenshot.py --out logs\shot.png` - the board renders its LVGL screen to RAM and sends it over USB serial; the script turns it into a PNG (CRC-checked) that can be viewed. Use this to check layout, colours and artwork instead of guessing. `--tap art` presses the cover (UI only). `--tap play|next|prev` is refused unless the active session is the silent fake test session (`companion/tools/fake_media_session.py`), because it would press the real controls of whatever the owner is playing. Never ship a build with `APP_DEV_TOOLS`.
+**Seeing the real screen:** (since M8b also scripted input: `--do swipe_right|swipe_left|swipe_up|swipe_down|swipe_diag|swipe_bar|swipe_bar_v|swipe_text|touch_cover|touch_play|key_up|key_down|keyhold_*|<action>_shot` drives a virtual finger through the real LVGL input path or simulates a side-button press; all of these are refused unless the active session is the fake test session - except `swipe_up` / `swipe_down` (they only change WHICH session is shown). `tools/session_test.py` is the full hardware-in-the-loop test of gestures, source switching and per-app volume; `tools/soak_gestures.py` the long soak. `companion --prefer-app python.exe` pins the display to the fake session for such tests - but NEVER pin or send commands while the owner is testing by hand: their key presses and swipes would hit the wrong app.) build with `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 build`, run the companion with `--dev-tools`, then `tools\venv\Scripts\python.exe tools\screenshot.py --out logs\shot.png` - the board renders its LVGL screen to RAM and sends it over USB serial; the script turns it into a PNG (CRC-checked) that can be viewed. Use this to check layout, colours and artwork instead of guessing. `--tap art` presses the cover (UI only). `--tap play|next|prev` is refused unless the active session is the silent fake test session (`companion/tools/fake_media_session.py`), because it would press the real controls of whatever the owner is playing. Never ship a build with `APP_DEV_TOOLS`.
 
 For every milestone:
 
@@ -637,8 +654,9 @@ They may be future enhancements, but they must not delay the core music-display 
 
 ## Immediate Next Task
 
-State on 2026-10-12: the MVP works, the Milestone 8 player redesign and the Milestone 8b refinement pass (landscape cards for widescreen art, Spotify logo removed, swipe gestures, per-app volume, side buttons as volume keys) are done
-(see `docs/milestones/MVP-media-companion.md`, `M8-player-redesign.md`, `M8b-art-layout-gestures-volume.md`). Next, in this order:
+State on 2026-10-12: the MVP works, the Milestone 8 player redesign, the Milestone 8b refinement pass (landscape cards for widescreen art, Spotify logo removed, swipe gestures, per-app volume, side buttons as volume keys)
+and the Milestone 8c pass (reversed horizontal swipes, vertical media-source switching, every command bound to the displayed session, sharper browser thumbnails) are done
+(see `docs/milestones/MVP-media-companion.md`, `M8-player-redesign.md`, `M8b-art-layout-gestures-volume.md`, `M8c-session-switching.md`). Next, in this order:
 
 1. Collect the owner's feedback on the refined screen (spacing, sizes, gesture feel, the PWR-key check, fallback font for non-Latin titles - many YouTube titles have them) and fix what they point out.
 2. B. M9 Cyberpunk idle screen (shown when nothing is playing; clock; `NO ACTIVE PLAYBACK`) - the owner asked not to start it before the 8b pass was complete.

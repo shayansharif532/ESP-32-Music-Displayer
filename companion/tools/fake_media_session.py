@@ -4,6 +4,8 @@ without playing any sound, so the companion and the ESP32 can be tested end to e
     companion\\.venv\\Scripts\\python.exe companion\\tools\\fake_media_session.py          (Ctrl+C to stop)
         --art-dir DIR      use the images in DIR as the covers of the tracks (see make_test_covers.py)
         --silent-audio     also open a silent audio stream, so per-app volume can be tested (the session is python.exe)
+        --paused           start paused (a paused session must not take over a display that follows the playing one)
+        --app-id NAME      give the session its own app id (default: python.exe), to test with several fake sources
 
 Needs:  pip install winrt-Windows.Media.Playback winrt-Windows.Media.Core
 """
@@ -63,13 +65,13 @@ def make_cover(idx: int, color, aspect) -> bytes:
 
 
 class Fake:
-    def __init__(self) -> None:
+    def __init__(self, paused: bool = False) -> None:
         self.player = MediaPlayer()
         self.player.command_manager.is_enabled = False
         self.smtc = self.player.system_media_transport_controls
         self.lock = threading.Lock()
         self.idx = 0
-        self.playing = True
+        self.playing = not paused
         self.pos = 0.0
         self.t_ref = time.monotonic()
         s = self.smtc
@@ -168,12 +170,20 @@ def start_silent_audio() -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    paused = "--paused" in args
+    if paused:
+        args.remove("--paused")
+    if "--app-id" in args:
+        i = args.index("--app-id")
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(args[i + 1])
+        del args[i:i + 2]
     if "--silent-audio" in args:
         args.remove("--silent-audio")
         start_silent_audio()
     if len(args) > 1 and args[0] == "--art-dir":
         load_tracks_from_dir(args[1])
-    fake = Fake()
+    fake = Fake(paused)
     print("fake media session is up (silent). Ctrl+C to stop.", flush=True)
     try:
         while True:

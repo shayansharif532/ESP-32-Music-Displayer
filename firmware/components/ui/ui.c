@@ -6,7 +6,9 @@
  *
  * The cover keeps its own shape: square art is a large square, 16:9 video thumbnails are a landscape card (rounded
  * corners, never stretched), and the title / artist move with it. Extra touch input (no permanent widgets):
- *   - horizontal swipe on the screen: right = next track, left = previous track (not from the progress bar)
+ *   - horizontal swipe on the screen: left = next track, right = previous track (not from the progress bar)
+ *   - vertical swipe on the screen: up = next media source (another app's session on the PC), down = previous source;
+ *     a short pill shows the source's name (not from the progress bar, nothing happens with a single source)
  *   - a short translucent "Volume 65%" pill on top when the side buttons change the volume
  */
 #include "ui.h"
@@ -40,14 +42,16 @@
 #define SIDE_DX         112
 
 /* ---- touch gestures ---------------------------------------------------------------------------- */
-#define SWIPE_MIN_DX    72      /* px of horizontal travel before it counts as a swipe (a tap moves < 10) */
-#define SWIPE_MAX_DY    44      /* more vertical travel than this at any time: not a swipe */
+#define SWIPE_MIN       72      /* px of travel along the swipe axis before it counts as a swipe (a tap moves < 10) */
+#define SWIPE_STRAY     44      /* more travel than this across the axis at any time: a diagonal, not a swipe */
 #define SWIPE_MAX_MS    1000    /* slower than this: a drag, not a swipe */
 #define TAP_SLOP        24      /* a press that moved further than this is not a tap (no full-screen toggle / button press) */
 #define FX_SIZE         92
 #define FX_MS           420
 #define VOL_HOLD_MS     900
 #define VOL_FADE_MS     260
+#define SRC_HOLD_MS     1100    /* the source pill stays a little longer: it names a whole screen change */
+#define SRC_DOTS_MAX    6
 
 /* ---- palette ----------------------------------------------------------------------------------- */
 #define COL_SCREEN_TOP  0x1D1D36                           /* shown when there is no artwork */
@@ -72,7 +76,8 @@ static struct {
     lv_obj_t *slider, *t_elapsed, *t_total;
     lv_obj_t *btn_prev, *btn_play, *btn_next, *lbl_play;
     lv_obj_t *fx, *fx_lbl;               /* swipe feedback (top-most) */
-    lv_obj_t *vol, *vol_lbl, *vol_bar;   /* volume pill (top-most) */
+    lv_obj_t *vol, *vol_lbl, *vol_bar;   /* volume / source pill (top-most) */
+    lv_obj_t *dots[SRC_DOTS_MAX];        /* source position dots inside the pill (instead of the volume bar) */
     lv_timer_t *vol_timer;
 
     ui_cmd_cb_t cb;
@@ -82,8 +87,9 @@ static struct {
     bool playing;
     bool fullscreen;
     bool can_prev, can_next;
+    int sources;                         /* media sources the PC offers; a vertical swipe needs >= 2 */
     int art_w, art_h;                    /* pixel size of the cover on screen (normal layout) */
-    int fx_dir;
+    int fx_dx, fx_dy;                    /* direction the swipe disc drifts (-1, 0, +1) */
     uint32_t duration_ms;
     uint32_t anchor_ms;      /* progress at anchor_tick */
     uint32_t anchor_tick;
@@ -94,7 +100,7 @@ static struct {
 /* swipe tracking for the current touch (LVGL task only) */
 static struct {
     bool tracking;           /* a touch that may still turn into a swipe */
-    bool vertical;           /* strayed too far vertically: never a swipe */
+    bool stray_x, stray_y;   /* moved more than SWIPE_STRAY sideways / up-down at some point: that axis can no longer be a swipe's cross-axis */
     bool moved;              /* travelled further than TAP_SLOP: not a tap */
     bool swiped;             /* a swipe was already acted on during this touch */
     int32_t x0, y0;
@@ -323,7 +329,8 @@ static void fx_anim_cb(void *var, int32_t v)       /* v: 0..255 over the animati
 {
     (void)var;
     lv_obj_set_style_opa(s.fx, (lv_opa_t)(((255 - v) * 210) / 255), 0);
-    lv_obj_set_style_translate_x(s.fx, s.fx_dir * (v * 34 / 255), 0);
+    lv_obj_set_style_translate_x(s.fx, s.fx_dx * (v * 34 / 255), 0);
+    lv_obj_set_style_translate_y(s.fx, s.fx_dy * (v * 34 / 255), 0);
 }
 
 static void fx_anim_done(lv_anim_t *a)
@@ -332,10 +339,12 @@ static void fx_anim_done(lv_anim_t *a)
     lv_obj_add_flag(s.fx, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void show_swipe_fx(int dir)       /* dir: +1 = next (swipe right), -1 = previous */
+/* A faint disc with a symbol appears over the cover and drifts a little in the direction of the swipe. */
+static void show_swipe_fx(const char *symbol, int dx, int dy)
 {
-    s.fx_dir = dir;
-    lv_label_set_text(s.fx_lbl, dir > 0 ? LV_SYMBOL_NEXT : LV_SYMBOL_PREV);
+    s.fx_dx = dx;
+    s.fx_dy = dy;
+    lv_label_set_text(s.fx_lbl, symbol);
     lv_obj_center(s.fx_lbl);
     lv_area_t a = ui_art_area(s.art_w, s.art_h);
     int cy = s.fullscreen ? SCR / 2 : (a.y1 + a.y2) / 2;
@@ -368,7 +377,7 @@ static void on_screen_touch(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED) {
         sw.tracking = true;
-        sw.vertical = sw.moved = sw.swiped = false;
+        sw.stray_x = sw.stray_y = sw.moved = sw.swiped = false;
         sw.x0 = p.x;
         sw.y0 = p.y;
         sw.t0 = lv_tick_get();
@@ -382,24 +391,42 @@ static void on_screen_touch(lv_event_t *e)
     if (adx > TAP_SLOP || ady > TAP_SLOP) {
         sw.moved = true;
     }
-    if (ady > SWIPE_MAX_DY) {
-        sw.vertical = true;
+    if (adx > SWIPE_STRAY) {
+        sw.stray_x = true;
     }
-    if (sw.vertical || sw.swiped || lv_tick_elaps(sw.t0) > SWIPE_MAX_MS) {
+    if (ady > SWIPE_STRAY) {
+        sw.stray_y = true;
+    }
+    if (sw.swiped || lv_tick_elaps(sw.t0) > SWIPE_MAX_MS) {
         return;
     }
-    if (adx >= SWIPE_MIN_DX && ady * 2 <= adx) {         /* far enough, and clearly more horizontal than vertical */
-        sw.swiped = true;
-        sw.tracking = false;
-        lv_indev_wait_release(indev);                    /* no release / click on whatever the finger started on */
-        if (dx > 0) {                                    /* swipe right -> next track */
+    /* A horizontal swipe: far enough sideways, never strayed up/down, and clearly more horizontal than vertical.
+     * A vertical swipe is the same with the axes swapped. A diagonal drag strays on both axes and is neither. */
+    const bool horizontal = adx >= SWIPE_MIN && !sw.stray_y && ady * 2 <= adx;
+    const bool vertical = ady >= SWIPE_MIN && !sw.stray_x && adx * 2 <= ady;
+    if (!horizontal && !vertical) {
+        return;
+    }
+    sw.swiped = true;
+    sw.tracking = false;
+    lv_indev_wait_release(indev);                        /* no release / click on whatever the finger started on */
+    if (horizontal) {
+        if (dx < 0) {                                    /* swipe left -> next track */
             if (s.can_next) {
-                show_swipe_fx(+1);
+                show_swipe_fx(LV_SYMBOL_NEXT, -1, 0);
                 fire(UI_CMD_NEXT, 0);
             }
-        } else if (s.can_prev) {                         /* swipe left -> previous track */
-            show_swipe_fx(-1);
+        } else if (s.can_prev) {                         /* swipe right -> previous track */
+            show_swipe_fx(LV_SYMBOL_PREV, +1, 0);
             fire(UI_CMD_PREV, 0);
+        }
+    } else if (s.sources >= 2) {                         /* vertical: another media source exists */
+        if (dy < 0) {                                    /* swipe up -> next source */
+            show_swipe_fx(LV_SYMBOL_UP, 0, -1);
+            fire(UI_CMD_SOURCE_NEXT, 0);
+        } else {                                         /* swipe down -> previous source */
+            show_swipe_fx(LV_SYMBOL_DOWN, 0, +1);
+            fire(UI_CMD_SOURCE_PREV, 0);
         }
     }
 }
@@ -530,6 +557,9 @@ static void make_overlays(void)
     lv_obj_set_style_bg_opa(s.vol, LV_OPA_60, 0);
     lv_obj_remove_flag(s.vol, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     s.vol_lbl = make_label(s.vol, &lv_font_montserrat_20, 0xFFFFFF);
+    lv_obj_set_width(s.vol_lbl, 216);
+    lv_obj_set_style_text_align(s.vol_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s.vol_lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_label_set_text(s.vol_lbl, "Volume");
     lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
     s.vol_bar = lv_bar_create(s.vol);
@@ -543,6 +573,16 @@ static void make_overlays(void)
     lv_obj_set_style_bg_color(s.vol_bar, lv_color_white(), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s.vol_bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_bar_set_range(s.vol_bar, 0, 100);
+    for (int i = 0; i < SRC_DOTS_MAX; i++) {                       /* source position dots, shown instead of the bar */
+        s.dots[i] = lv_obj_create(s.vol);
+        lv_obj_remove_style_all(s.dots[i]);
+        lv_obj_set_size(s.dots[i], 7, 7);
+        lv_obj_set_style_radius(s.dots[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s.dots[i], lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(s.dots[i], LV_OPA_30, 0);
+        lv_obj_remove_flag(s.dots[i], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s.dots[i], LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_add_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
     s.vol_timer = lv_timer_create(vol_timer_cb, VOL_HOLD_MS, NULL);
     lv_timer_pause(s.vol_timer);
@@ -728,6 +768,7 @@ void ui_show_idle(const char *line1, const char *line2)
     }
     s.has_track = false;
     s.playing = false;
+    s.sources = 0;
     s.can_prev = s.can_next = false;
     s.duration_ms = 0;
     s.anchor_ms = 0;
@@ -815,6 +856,49 @@ void ui_set_status(ui_status_level_t level, const char *text)
     bsp_display_unlock();
 }
 
+void ui_set_sources(int count)
+{
+    if (!s.ready || !bsp_display_lock(1000)) {
+        return;
+    }
+    s.sources = count;
+    bsp_display_unlock();
+}
+
+/* Shows the pill (volume or source) and (re)starts its hold-then-fade timer. LVGL lock held by the caller. */
+static void pill_show(uint32_t hold_ms)
+{
+    lv_anim_delete(s.vol, vol_fade_cb);
+    lv_obj_set_style_opa(s.vol, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_set_period(s.vol_timer, hold_ms);
+    lv_timer_reset(s.vol_timer);
+    lv_timer_resume(s.vol_timer);
+}
+
+void ui_show_source(const char *name, int index, int count)
+{
+    if (!s.ready || !bsp_display_lock(1000)) {
+        return;
+    }
+    lv_label_set_text(s.vol_lbl, (name && name[0]) ? name : "Source");
+    lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_add_flag(s.vol_bar, LV_OBJ_FLAG_HIDDEN);
+    const int n = count < 1 ? 1 : (count > SRC_DOTS_MAX ? SRC_DOTS_MAX : count);
+    const int x0 = (236 - (n * 7 + (n - 1) * 9)) / 2;
+    for (int i = 0; i < SRC_DOTS_MAX; i++) {
+        if (i < n) {
+            lv_obj_set_pos(s.dots[i], x0 + i * 16, 43);
+            lv_obj_set_style_bg_opa(s.dots[i], i == index - 1 ? LV_OPA_COVER : LV_OPA_30, 0);
+            lv_obj_remove_flag(s.dots[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s.dots[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    pill_show(SRC_HOLD_MS);
+    bsp_display_unlock();
+}
+
 void ui_show_volume(int percent, bool muted)
 {
     if (!s.ready || !bsp_display_lock(1000)) {
@@ -833,11 +917,11 @@ void ui_show_volume(int percent, bool muted)
     }
     lv_label_set_text(s.vol_lbl, buf);
     lv_obj_align(s.vol_lbl, LV_ALIGN_TOP_MID, 0, 10);
-    lv_anim_delete(s.vol, vol_fade_cb);
-    lv_obj_set_style_opa(s.vol, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(s.vol, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_reset(s.vol_timer);
-    lv_timer_resume(s.vol_timer);
+    lv_obj_remove_flag(s.vol_bar, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < SRC_DOTS_MAX; i++) {
+        lv_obj_add_flag(s.dots[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    pill_show(VOL_HOLD_MS);
     bsp_display_unlock();
 }
 

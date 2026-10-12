@@ -125,12 +125,23 @@ static void action_task(void *arg)
     }
     const char *a = name;
     ESP_LOGI(TAG, "debug action: %s%s", a, s_shot_mid ? " (+ screenshot)" : "");
-    if (strcmp(a, "swipe_right") == 0)      drag(150, 200, 350, 200, 8);     /* on the cover: -> next */
-    else if (strcmp(a, "swipe_left") == 0)  drag(350, 200, 150, 200, 8);     /* -> previous */
-    else if (strcmp(a, "swipe_up") == 0)    drag(240, 330, 240, 120, 8);     /* vertical: nothing */
+    if (strcmp(a, "swipe_right") == 0)      drag(150, 200, 350, 200, 8);     /* on the cover: finger moves right -> previous track */
+    else if (strcmp(a, "swipe_left") == 0)  drag(350, 200, 150, 200, 8);     /* finger moves left -> next track */
+    else if (strcmp(a, "swipe_up") == 0 || strcmp(a, "swipe_down") == 0) {   /* vertical: next / previous media SOURCE (selection only) */
+        const bool up = a[6] == 'u';
+        const bool shot = s_shot_mid;
+        s_shot_mid = false;                                                   /* the pill appears after the PC answered: shoot after the drag */
+        if (up) drag(240, 330, 240, 120, 8);
+        else    drag(240, 120, 240, 330, 8);
+        if (shot) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            send_screenshot();
+        }
+    }
     else if (strcmp(a, "swipe_diag") == 0)  drag(150, 150, 330, 330, 8);     /* 45 degrees: nothing */
     else if (strcmp(a, "swipe_bar") == 0)   drag(120, 406, 330, 406, 8);     /* starts on the progress bar: seeks, never changes track */
-    else if (strcmp(a, "swipe_text") == 0)  drag(110, 352, 370, 352, 8);     /* starts on the text: still a swipe -> next */
+    else if (strcmp(a, "swipe_bar_v") == 0) drag(240, 406, 240, 200, 8);     /* vertical from the progress bar: seeks, never changes source */
+    else if (strcmp(a, "swipe_text") == 0)  drag(110, 352, 370, 352, 8);     /* starts on the text: still a swipe -> previous */
     else if (strcmp(a, "touch_cover") == 0) tap(240, 200);                   /* a real tap on the cover: full-screen toggle */
     else if (strcmp(a, "touch_play") == 0)  tap(240, 446);                   /* a real tap on play / pause */
     else if (strcmp(a, "key_up") == 0 || strcmp(a, "key_down") == 0) {       /* as if the upper / lower side button was pressed */

@@ -44,7 +44,7 @@ tokens or internet access is involved.
 | `wifi_mgr` | `firmware/components/wifi_mgr/` | station Wi-Fi, exponential-backoff reconnect, SNTP (for the future clock), credentials RAM-only, nothing sensitive logged |
 | `pc_media` | `firmware/components/pc_media/` | listens for the beacon (or uses a fixed IP), polls `/now-playing` (time-scheduled, never starved by commands), fetches + decodes artwork (square or landscape, up to 432x320) into two fixed PSRAM buffers, queues commands (volume commands coalesced), reports link status and volume results |
 | `side_keys` | `firmware/components/side_keys/` | the two side buttons: BOOT (GPIO0) and PWR (AXP2101 key flags polled over I2C) as volume down / up, debounce, hold-repeat (capped at 3 s) |
-| `ui` | `firmware/components/ui/` | the LVGL Now Playing screen (square cover or landscape card with the text following it); thread-safe API; local progress interpolation; swipe gestures (right = next, left = previous); swipe-feedback disc and the transient "Volume 65%" pill; callbacks only enqueue |
+| `ui` | `firmware/components/ui/` | the LVGL Now Playing screen (square cover or landscape card with the text following it); thread-safe API; local progress interpolation; swipe gestures (left = next track, right = previous; up = next media source, down = previous source); swipe-feedback disc, and the transient pill (the source name with position dots, or "Volume 65%"); callbacks only enqueue |
 | `main` | `firmware/main/` | display/LVGL start-up (24 KB LVGL stack on core 1, one draw unit), glue: companion events → UI calls, UI taps → commands, status line; UI-only demo when no Wi-Fi credentials are built in; health/soak logging |
 
 Tasks (ESP32): LVGL task (core 1, prio 4); `pc_poll` and `pc_discovery` (core 0, prio 3); `side_keys` (core 0, prio 4, 20 ms poll of GPIO0 and the AXP2101 key flags); Wi-Fi/lwIP (core 0); health logger (prio 1).
@@ -58,20 +58,24 @@ Base: `http://<pc-ip>:8765` (port configurable). All JSON is UTF-8.
 |---|---|
 | `GET /now-playing` | JSON state (below). Always 200 while the companion runs; `has_session:false` when nothing is playing |
 | `GET /artwork[?size=N[&maxw=W]]` | `image/jpeg`, **baseline** (non-progressive) 4:2:0. Without `maxw`: a square `size`x`size` (default 300; 64..640; wide art letterboxed on a blurred copy - legacy). **With `maxw`: the artwork keeps its aspect ratio inside a `maxw`x`size` box** - square art stays `size`x`size`, 16:9 art becomes a landscape card (432x242 for `size=312&maxw=432`), never stretched; extreme ratios are centre-cropped to 2.4:1 / 0.7:1. Before rendering, app logos baked into the image (Spotify's alpha composite) and symmetric black letterbox bars are removed (`artwork.py`). Headers `ETag: "<art_id>-<size>-<maxw>"`, `X-Art-Id`. `404` when the session has no artwork. Honours `If-None-Match` (304) |
-| `POST /control/playpause` · `/control/play` · `/control/pause` · `/control/next` · `/control/previous` | `{"ok":true,"action":"next","app":"Spotify.exe"}`; `ok:false` when the session refuses (control not enabled by that app) |
-| `POST /control/seek?position_ms=N` | as above; `ok:false` if the session does not support seeking |
+| `POST /control/playpause` · `/control/play` · `/control/pause` · `/control/next` · `/control/previous` (`&app=<app id>`) | `{"ok":true,"action":"next","app":"Spotify.exe"}`; `ok:false` when the session refuses (control not enabled by that app). **`app` = the app the display shows: the command goes to exactly that session and is refused (`"that media session is gone"`) if it no longer exists** - never to another session. Without `app`: the session the companion would show |
+| `POST /control/seek?position_ms=N` (`&app=`) | as above; `ok:false` if the session does not support seeking |
+| `POST /control/source-next` · `/control/source-prev` (`?from=<app id>`) | the vertical swipe: pins the display to the next / previous **usable media source** (playing or paused Windows media session with a title / artist; fixed alphabetical ring, wraps around) relative to `from`. `{"ok":true,"changed":true,"app":"chrome.exe","source":"Chrome","index":1,"count":2,"now":{<the new /now-playing>}}`; `changed:false` when there is only one source |
+| `POST /control/source-auto` · `GET /sources` | back to automatic selection · the swipe list `{"mode":"auto"\|"pinned","displayed":"...","sources":[{app,name,state,title,artist,displayed}]}` |
 | `GET /volume` | the **per-application** volume of the displayed app (its Windows audio-session volume, never the master volume): `{"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}`; `ok:false` + `"error":"no audio session found for ..."` when the app has none |
-| `POST /control/volume-up` · `/control/volume-down` (`?step=5`, `&app=<app id>`) · `POST /volume?level=0..100` | same answer with the new volume. `app` = the app the display is showing; honoured only if that app has a media session right now (otherwise the displayed session is used). Core Audio session mapping and browser limits: `docs/milestones/M8b-art-layout-gestures-volume.md` |
+| `POST /control/volume-up` · `/control/volume-down` (`?step=5`, `&app=<app id>`) · `POST /volume?level=0..100` | same answer with the new volume. `app` = the app the display is showing; the volume goes to that app's audio session and is refused if it no longer has a media session (no `app`: the session the companion would show). Core Audio session mapping and browser limits: `docs/milestones/M8b-art-layout-gestures-volume.md` |
 | `GET /health` | `{"ok":true,"service":"desk-media-companion","version":"0.1.0"}` |
 
 `/now-playing` fields: `ok`, `version`, `has_session`, `app` (Windows app id, e.g. `Spotify.exe`, `Chrome`), `state`
 (`playing|paused|stopped|changing|opened|closed|none`), `playing`, `title`, `artist` (artist, or channel for videos), `album`,
 `position_ms` (already extrapolated to "now" from the session's timeline), `duration_ms` (0 = unknown/live), `track_id` (changes when
 the track changes), `art_id` (changes when the artwork changes; `""` = none), `can_play`, `can_pause`, `can_next`, `can_prev`,
-`can_seek`, `seq` (bumps on any visible change).
+`can_seek`, `seq` (bumps on any visible change), and the source fields `source` (short app name, "Spotify" / "Chrome" / "Edge"), `sources` (how many
+sessions a vertical swipe can switch between), `source_index` (1-based position in that ring), `pinned` (the user selected this session).
 
-Session choice: the playing session wins (the system's current session if it is playing); otherwise the app that played last; otherwise the
-system's current session; broken sessions are skipped. Commands go to exactly the session being shown.
+Session choice (**auto**): the playing session wins (the system's current session if it is playing); otherwise the app that played last; otherwise the
+system's current session; broken sessions are skipped. **Pinned** (after a vertical swipe, ADR-005): the display, its controls and its volume stay on the selected session for as long as it exists - another app
+becoming active does not take over - and fall back to auto when it disappears. Commands go to exactly the session being shown (the display names it in every request).
 
 **Discovery:** the companion broadcasts `DESKMEDIA1 {"port":8765,"name":"<pc name>"}` on UDP **8766** every 2 s from each real LAN
 interface (VPN / virtual adapters skipped). The display uses the packet's source address as the PC's IP. `DEV_COMPANION_HOST` in

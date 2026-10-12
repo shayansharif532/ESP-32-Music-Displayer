@@ -23,10 +23,14 @@ import zlib
 from PIL import Image
 
 COMPANION = "http://127.0.0.1:8765"
-# Dev-firmware actions (see firmware/main/dev_tools.c); every one of them can reach a media control, so they are all guarded.
-DEV_ACTIONS = ["swipe_right", "swipe_left", "swipe_up", "swipe_diag", "swipe_bar", "swipe_text", "touch_cover", "touch_play",
-               "key_up", "key_down", "keyhold_up", "keyhold_down", "swipe_right_shot", "swipe_left_shot", "key_up_shot", "key_down_shot",
+# Dev-firmware actions (see firmware/main/dev_tools.c). Almost every one can reach a media control, so they are guarded: they only
+# run while the displayed session is the fake test session. swipe_up / swipe_down only change WHICH session is shown (the vertical
+# swipe selects a media source; nothing is played, paused, skipped or seeked), so they are allowed anywhere.
+DEV_ACTIONS = ["swipe_right", "swipe_left", "swipe_up", "swipe_down", "swipe_diag", "swipe_bar", "swipe_bar_v", "swipe_text",
+               "touch_cover", "touch_play", "key_up", "key_down", "keyhold_up", "keyhold_down",
+               "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot"]
+SELECTION_ONLY = {"swipe_up", "swipe_down", "swipe_up_shot", "swipe_down_shot"}
 CHUNK = 192
 NL = bytes([10])
 
@@ -139,7 +143,7 @@ def main() -> int:
             time.sleep(3.0)                                   # let the new track's artwork load first
             ser.reset_input_buffer()
         if args.do:
-            if not args.force and media_app(args.companion) != "python.exe":
+            if not args.force and args.do not in SELECTION_ONLY and media_app(args.companion) != "python.exe":
                 print("refusing: this action could send a real command (next / previous / seek / play / volume) to whatever the "
                       "PC is playing. It only runs against the fake test session. Use --force if you really want that.", file=sys.stderr)
                 return 4

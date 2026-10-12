@@ -44,6 +44,8 @@ static void on_ui_cmd(ui_cmd_t cmd, uint32_t arg, void *ctx)
     case UI_CMD_PLAY_PAUSE: pc_media_command(PC_MEDIA_CMD_PLAY_PAUSE, 0); break;
     case UI_CMD_NEXT:       pc_media_command(PC_MEDIA_CMD_NEXT, 0); break;
     case UI_CMD_SEEK:       pc_media_command(PC_MEDIA_CMD_SEEK, arg); break;
+    case UI_CMD_SOURCE_NEXT: pc_media_command(PC_MEDIA_CMD_SOURCE_NEXT, 0); break;
+    case UI_CMD_SOURCE_PREV: pc_media_command(PC_MEDIA_CMD_SOURCE_PREV, 0); break;
     }
 }
 
@@ -64,6 +66,12 @@ static void on_volume(int percent, bool muted, void *ctx)
 {
     (void)ctx;
     ui_show_volume(percent, muted);
+}
+
+static void on_source(const char *name, int index, int count, void *ctx)
+{
+    (void)ctx;
+    ui_show_source(name, index, count);
 }
 
 /* ---- companion events -> UI (called from the pc_media poll task) ----------------------------------------- */
@@ -124,9 +132,10 @@ static void on_state(const pc_media_state_t *st, void *ctx)
         }
         return;
     }
+    ui_set_sources(st->sources);
     if (strcmp(st->track_id, s_shown_track) != 0 || s_idle_shown) {
         char src[sizeof s_source];
-        friendly_source(st->app, src, sizeof src);
+        friendly_source(st->source[0] ? st->source : st->app, src, sizeof src);
         strlcpy(s_source, src, sizeof s_source);
         const char *title = st->title[0] ? st->title : s_source;
         const char *artist = st->artist[0] ? st->artist : st->album;
@@ -266,7 +275,7 @@ void app_main(void)
         .art_max_h = UI_ART_SIZE,
         .cover_area = ui_art_area,
         .cbs = {
-            .on_state = on_state, .on_art = on_art, .on_status = on_status, .on_volume = on_volume,
+            .on_state = on_state, .on_art = on_art, .on_status = on_status, .on_volume = on_volume, .on_source = on_source,
 #ifdef APP_DEV_TOOLS
             .on_debug = on_debug,
 #endif

@@ -21,7 +21,7 @@ import io
 import logging
 from typing import Optional
 
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageEnhance, ImageOps
 
 log = logging.getLogger("art")
 
@@ -194,6 +194,42 @@ def target_size(src_w: int, src_h: int, size: int, max_w: Optional[int]) -> tupl
     return tw & ~1, th & ~1, False
 
 
+def _limit(sharp: Image.Image, base: Image.Image, slack: int) -> Image.Image:
+    """Clip a sharpened picture to the local min / max (5x5) of the unsharpened one, plus `slack` levels: edges get crisper but can
+    never overshoot, so there are no halos / ringing around them."""
+    hi = base.filter(ImageFilter.MaxFilter(5)).point(lambda v: min(255, v + slack))
+    lo = base.filter(ImageFilter.MinFilter(5)).point(lambda v: max(0, v - slack))
+    return ImageChops.lighter(ImageChops.darker(sharp, hi), lo)
+
+
+def _edge_mask(base: Image.Image, lo: int = 10, hi: int = 60) -> Image.Image:
+    """0..255 mask that is high on real edges and zero on flat areas / gradients (Sobel magnitude, softened)."""
+    g = base.convert("L")
+    sx = g.filter(ImageFilter.Kernel((3, 3), (-1, 0, 1, -2, 0, 2, -1, 0, 1), scale=4, offset=128))
+    sy = g.filter(ImageFilter.Kernel((3, 3), (-1, -2, -1, 0, 0, 0, 1, 2, 1), scale=4, offset=128))
+    mag = ImageChops.add(sx.point(lambda v: abs(v - 128)), sy.point(lambda v: abs(v - 128)))
+    mask = mag.point(lambda v: 0 if v <= lo else (255 if v >= hi else (v - lo) * 255 // (hi - lo)))
+    return mask.filter(ImageFilter.GaussianBlur(1.2))
+
+
+UPSCALE_FREE = 1.5          # up-scales below this factor are left exactly as the Lanczos resampler made them (Spotify: 233 -> 312 px = 1.34x)
+UPSCALE_FULL = 2.5          # ... and the sharpening reaches full strength at this factor (a 150 px Chromium thumbnail -> 432 px = 2.9x)
+
+
+def enhance_upscale(img: Image.Image, factor: float) -> Image.Image:
+    """Restrained sharpening for pictures that had to be enlarged a lot (the ~150 px thumbnails Chromium gives Windows).
+
+    It cannot create detail that was never delivered - it only stops the enlargement looking smeared: an unsharp mask that is
+    (a) applied only at real edges (flat areas, skies and JPEG block noise stay untouched), (b) clipped to the local min / max
+    of the un-sharpened picture (no halos), and (c) scaled by how much was enlarged: nothing below UPSCALE_FREE, so covers that
+    are only slightly enlarged (Spotify) come out exactly as before."""
+    k = min(1.0, max(0.0, (factor - UPSCALE_FREE) / (UPSCALE_FULL - UPSCALE_FREE)))
+    if k <= 0.0 or img.width < 16 or img.height < 16:
+        return img
+    sharp = _limit(img.filter(ImageFilter.UnsharpMask(radius=1.8, percent=max(1, round(170 * k)), threshold=0)), img, round(4 + 6 * k))
+    return Image.composite(sharp, img, _edge_mask(img))
+
+
 def render_jpeg(img: Image.Image, size: int, max_w: Optional[int] = None) -> bytes:
     """Baseline 4:2:0 JPEG (what the ESP32's decoder handles). Without max_w the result is the legacy square (wide art is
     letterboxed on a blurred copy of itself); with max_w the aspect ratio is kept inside a max_w x size box."""
@@ -202,9 +238,8 @@ def render_jpeg(img: Image.Image, size: int, max_w: Optional[int] = None) -> byt
     if max_w is None and not (SQUARE_MIN <= w / h <= SQUARE_MAX):
         out_img = _blurred_letterbox(img, size)
     else:
-        out_img = ImageOps.fit(img, (tw, th), Image.LANCZOS)
-        if tw > w * 1.35:                                # small source (Chromium thumbnails): crisp up-scale, not mush
-            out_img = out_img.filter(ImageFilter.UnsharpMask(radius=1.4, percent=55, threshold=2))
+        out_img = ImageOps.fit(img, (tw, th), Image.LANCZOS)         # the resizing happens here on the PC, never on the ESP32
+        out_img = enhance_upscale(out_img, tw / w)
     buf = io.BytesIO()
     out_img.save(buf, format="JPEG", quality=88, optimize=False, progressive=False, subsampling=2)
     return buf.getvalue()

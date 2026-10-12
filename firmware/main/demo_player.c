@@ -69,6 +69,9 @@ static void demo_task(void *arg)
                 pos = e.arg;
                 changed_pos = true;
                 break;
+            case UI_CMD_SOURCE_NEXT:                 /* the demo has a single source */
+            case UI_CMD_SOURCE_PREV:
+                break;
             }
         } else if (playing) {
             pos += 1000;

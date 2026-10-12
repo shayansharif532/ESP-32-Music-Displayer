@@ -19,6 +19,9 @@ typedef struct {
     bool     playing;
     char     state[12];         /* "playing" "paused" "stopped" ... */
     char     app[48];           /* Windows app id of the session, e.g. "Spotify.exe", "Chrome" */
+    char     source[24];        /* short name of that app for the screen: "Spotify", "Chrome", "Edge" ("" from an old companion) */
+    uint8_t  sources;           /* how many media sources (sessions) a vertical swipe can switch between; < 2: nothing to switch */
+    uint8_t  source_index;      /* 1-based position of this session in that list */
     char     title[128];
     char     artist[128];       /* artist, or channel name for videos */
     char     album[96];
@@ -44,6 +47,8 @@ typedef enum {
     PC_MEDIA_CMD_SEEK,          /* arg = position in ms */
     PC_MEDIA_CMD_VOLUME_UP,     /* arg = step in percent points (0 = 5): the displayed app's own volume, not the PC's master volume */
     PC_MEDIA_CMD_VOLUME_DOWN,
+    PC_MEDIA_CMD_SOURCE_NEXT,   /* switch the display (and everything it controls) to the next / previous media session on the PC */
+    PC_MEDIA_CMD_SOURCE_PREV,
 } pc_media_cmd_t;
 
 typedef struct {
@@ -54,6 +59,9 @@ typedef struct {
     /* Result of a volume command: the app's new volume 0..100 (muted = its session is muted), -1 when the displayed app has
      * no controllable audio session, -2 when the PC did not answer. */
     void (*on_volume)(int percent, bool muted, void *ctx);
+    /* The PC switched to another media source after a swipe: its short name and 1-based position among `count` sources. The new
+     * session's state arrives through on_state / on_art right before this call. */
+    void (*on_source)(const char *name, int index, int count, void *ctx);
     /* Development only: a one-shot request from the companion's /debug route ("screenshot", "tap_next", ...). */
     void (*on_debug)(const char *what, void *ctx);
     void (*on_status)(pc_media_status_t status, const char *detail, void *ctx);
