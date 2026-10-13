@@ -11,4 +11,4 @@ if(APP_DEV_TOOLS)
     add_compile_definitions(APP_DEV_TOOLS=1)
 endif()
 
-project(spotify_desk)
+project(deskmedia_display)

@@ -6,7 +6,7 @@
  *
  * Without developer credentials in firmware/secrets.local.h the firmware runs the UI-only demo player instead.
  * The display/LVGL start-up is owned here (instead of the stock bsp_display_start()) so the LVGL task gets a
- * larger stack and is pinned away from the Wi-Fi core; see docs/milestones/M1-lcd-touch.md.
+ * larger stack and is pinned away from the Wi-Fi core; see docs/development-history/M1-lcd-touch.md.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -124,6 +124,10 @@ static void show_screen(bool idle)
     }
     s_idle_visible = idle;
     idle_screen_activate(idle);
+    if (ui_pairing_defer(idle ? idle_screen_obj() : s_player_scr)) {   /* the pairing prompt keeps the display; it loads this screen when dismissed */
+        bsp_display_unlock();
+        return;
+    }
     lv_screen_load_anim(idle ? idle_screen_obj() : s_player_scr, LV_SCREEN_LOAD_ANIM_FADE_IN, SCREEN_FADE_MS, 0, false);
     bsp_display_unlock();
     ESP_LOGI(TAG, "screen -> %s", idle ? "idle" : "player");
@@ -347,6 +351,34 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
             show_screen(false);                              /* the warning belongs on the player, never on the idle screen */
         }
         break;
+    case PC_MEDIA_NEEDS_PAIRING:                           /* the PC answers, this display holds no key (only /hello is polled) */
+        ui_set_status(UI_STATUS_INFO, "Not paired");
+        link_message("Not paired", "On your PC: tray icon > Pair a display");
+        break;
+    case PC_MEDIA_PAIRING:                                 /* the code prompt is up (ui_pairing owns the screen) */
+        break;
+    case PC_MEDIA_PAIRING_LOST:                            /* the PC no longer accepts the stored key */
+        ui_set_status(UI_STATUS_WARN, "Pairing lost");
+        link_message("Pairing lost", "On your PC: tray icon > Pair a display");
+        break;
+    }
+}
+
+/* ---- pairing prompt: pc_media (poll task) shows / hides it, the user's tap (LVGL task) comes back as an answer ---- */
+
+static void on_pair_answer(bool accepted, void *ctx)
+{
+    (void)ctx;
+    pc_media_pair_answer(accepted);                        /* only posts: an atomic flag + a task notification */
+}
+
+static void on_pair_prompt(const char *pc_name, const char *code, void *ctx)
+{
+    (void)ctx;
+    if (code) {
+        ui_pairing_show(pc_name, code, on_pair_answer, NULL);
+    } else {
+        ui_pairing_hide();
     }
 }
 
@@ -438,6 +470,7 @@ void app_main(void)
         .cbs = {
             .on_state = on_state, .on_art = on_art, .on_status = on_status, .on_volume = on_volume, .on_source = on_source,
             .idle_have = on_idle_have, .idle_config = on_idle_config, .idle_picture = on_idle_picture,
+            .on_pair_prompt = on_pair_prompt,
 #ifdef APP_DEV_TOOLS
             .on_debug = on_debug,
 #endif

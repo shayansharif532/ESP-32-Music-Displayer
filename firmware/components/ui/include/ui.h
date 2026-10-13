@@ -93,9 +93,30 @@ bool ui_touch_moved(void);
 /* Monotonic count of touch presses seen by the UI (for soak-test logging). */
 uint32_t ui_touch_count(void);
 
+/* ---- pairing prompt (ui_pairing.c) ------------------------------------------------------------------------------
+ * A screen of its own, loaded over whatever is showing (with the same 350 ms fade as the player / idle switching): "Pair this display?",
+ * the PC's name, the 6-digit code and two large buttons, Pair and Cancel. The three calls take the LVGL lock themselves: call them from
+ * any task, NOT from an LVGL callback. The answer callback runs on the LVGL task after a tap: it must only post (no I/O, no blocking). */
+
+/* Shows the prompt. code6 = exactly 6 digits (shown as "NNN NNN"). A second call while it is up just replaces the texts. */
+void ui_pairing_show(const char *pc_name, const char *code6, void (*cb)(bool accepted, void *ctx), void *ctx);
+
+/* Hides it again and returns to the screen that should be showing (the one that was active before, or the one the screen switching
+ * logic asked for through ui_pairing_defer() in the meantime). */
+void ui_pairing_hide(void);
+
+/* The prompt is on screen. Lock-free, any task. */
+bool ui_pairing_active(void);
+
+/* For whoever loads screens (main.c's player / idle switching): while the prompt is up it keeps the display. Call with the LVGL lock
+ * held, instead of lv_screen_load_anim(): true = the prompt is up, `target` is remembered and loaded when it is dismissed. */
+bool ui_pairing_defer(lv_obj_t *target);
+
 #ifdef APP_DEV_TOOLS
 /* Development only: act as if a control was tapped ("play", "next", "prev", "art"). */
 void ui_debug_tap(const char *which);
 /* Development only: drive a virtual finger through the real LVGL input path (hit-testing, swipes, clicks). Callable from any task. */
 void ui_debug_touch(int x, int y, bool pressed);
+/* Development only: press Pair (true) / Cancel (false) on the pairing prompt through the same function the buttons use. */
+void ui_pairing_debug_press(bool accept);
 #endif

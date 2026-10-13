@@ -12,7 +12,7 @@
  *   - the idle screen is one more item of the source ring ("Idle Screen", last): it understands the vertical swipe too (not the horizontal one)
  *   - a short translucent "Volume 65%" pill on top when the side buttons change the volume
  * Spotify only: two small buttons flank the transport row - shuffle (left of previous) and repeat (right of next; off ->
- * playlist -> track). Subtle when off, Spotify green with a dot when on, a "1" on the repeat icon for "repeat the track".
+ * playlist -> track). Subtle when off, green with a dot when on, a "1" on the repeat icon for "repeat the track".
  */
 #include "ui.h"
 

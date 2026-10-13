@@ -154,7 +154,7 @@ esp_err_t wifi_mgr_init(wifi_mgr_cb_t cb, void *ctx)
         return err;
     }
     esp_netif_t *netif = esp_netif_create_default_wifi_sta();
-    esp_netif_set_hostname(netif, "spotify-desk");
+    esp_netif_set_hostname(netif, "deskmedia-display");
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wcfg));

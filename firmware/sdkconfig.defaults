@@ -32,7 +32,7 @@ CONFIG_LV_USE_CLIB_SPRINTF=y
 CONFIG_LV_DEF_REFR_PERIOD=15
 CONFIG_LV_OS_FREERTOS=y
 # One software-render thread. Waveshare's 2 draw units were present in the M1 touch crashes; a soak test must
-# prove 2 safe before anyone raises this (docs/milestones/M1-lcd-touch.md).
+# prove 2 safe before anyone raises this (docs/development-history/M1-lcd-touch.md).
 CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=1
 # GCC 15 rejects conflicting section attributes when LVGL fast memory uses IRAM.
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=n

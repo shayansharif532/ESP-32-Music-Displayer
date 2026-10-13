@@ -2,7 +2,8 @@
 /*
  * Client for the Windows companion app ("Desk Media Companion", see companion/): finds the PC on the LAN (UDP beacon,
  * or a fixed address), polls GET /now-playing, downloads GET /artwork when it changes, and sends control commands.
- * Plain HTTP on the local network - no accounts, no tokens, no TLS.
+ * Plain HTTP on the local network - no accounts, no TLS. The display pairs once with its companion (numeric code compared on both
+ * screens, docs/protocol.md section 3) and then signs every request / verifies every answer with the shared key.
  *
  * Everything runs in its own tasks; results arrive through the callbacks (called from the poll task, never from LVGL).
  */
@@ -51,6 +52,9 @@ typedef enum {
     PC_MEDIA_CONNECTED,         /* companion answers and a media session exists */
     PC_MEDIA_NO_SESSION,        /* companion answers, but nothing is playing on the PC */
     PC_MEDIA_UNREACHABLE,       /* companion known but not answering (PC asleep / app closed / firewall) */
+    PC_MEDIA_NEEDS_PAIRING,     /* companion answers, this display holds no key; detail = the PC's name. Nothing but /hello is polled */
+    PC_MEDIA_PAIRING,           /* a pairing attempt is running and the code prompt is on screen (on_pair_prompt); detail = the PC's name */
+    PC_MEDIA_PAIRING_LOST,      /* a key is stored but the companion no longer accepts it (forgotten on the PC / reinstalled / replaced); detail = PC name */
 } pc_media_status_t;
 
 typedef enum {
@@ -88,11 +92,15 @@ typedef struct {
     bool (*idle_have)(uint32_t version, void *ctx);
     int (*idle_config)(const char *json, size_t len, void *ctx);
     bool (*idle_picture)(const uint8_t *jpeg, size_t len, void *ctx);
+    /* Pairing prompt (optional, but without it the display never pairs): code != NULL = show "Pair this display?" with the PC's name
+     * and the 6 digits (a string of exactly 6 digits); code == NULL = hide it again. The user's answer goes back through
+     * pc_media_pair_answer(). Called from the poll task, never from LVGL. */
+    void (*on_pair_prompt)(const char *pc_name, const char *code, void *ctx);
     void *ctx;
 } pc_media_callbacks_t;
 
 typedef struct {
-    const char *static_host;    /* "192.168.1.143" to skip discovery, or NULL / "" for automatic */
+    const char *static_host;    /* "192.168.1.50" to skip discovery, or NULL / "" for automatic */
     uint16_t    port;           /* 0 = PC_MEDIA_DEFAULT_PORT */
     /* The cover is requested from the companion inside this box and keeps its aspect ratio: square art comes back
      * art_max_h x art_max_h, 16:9 art as a landscape card up to art_max_w wide. The companion renders exactly the size drawn. */
@@ -106,3 +114,10 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg);
 
 /* Thread-safe, non-blocking. */
 void pc_media_command(pc_media_cmd_t cmd, uint32_t arg);
+
+/* The user tapped Pair (true) or Cancel (false) on the prompt shown through on_pair_prompt. Thread-safe and non-blocking (an atomic flag
+ * plus a task notification), so the LVGL tap handler may call it; ignored when no prompt is showing. */
+void pc_media_pair_answer(bool accept);
+
+/* A pairing key is stored (also while the pairing is currently "lost"). Thread-safe. */
+bool pc_media_is_paired(void);

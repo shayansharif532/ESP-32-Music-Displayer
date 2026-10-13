@@ -7,7 +7,10 @@
  *     SHOT_END <crc32-of-raw-bytes>
  * tools/screenshot.py turns that into a PNG, so the real display content can be inspected from the PC.
  * "tap_play" / "tap_next" / "tap_prev" / "tap_art": press the on-screen control (same path as a finger).
- * Both are triggered by the companion's /debug route (companion started with --dev-tools).
+ * "pair_accept" / "pair_cancel": press Pair / Cancel on the pairing prompt (the function the buttons call); "pair_shot": screenshot
+ * of the pairing screen once its fade-in is over. (While the display is unpaired the companion's one-shot request rides on its /hello
+ * and /pair/status answers: pc_media reads it from there in development builds.)
+ * All are triggered by the companion's /debug route (companion started with --dev-tools).
  */
 #ifdef APP_DEV_TOOLS
 
@@ -73,6 +76,14 @@ static void send_screenshot(void)
 static void shot_task(void *arg)
 {
     (void)arg;
+    send_screenshot();
+    vTaskDelete(NULL);
+}
+
+static void pair_shot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));                        /* the prompt fades in over 350 ms: let it finish */
     send_screenshot();
     vTaskDelete(NULL);
 }
@@ -146,6 +157,8 @@ static void action_task(void *arg)
     else if (strcmp(a, "touch_play") == 0)  tap(240, 446);                   /* a real tap on play / pause */
     else if (strcmp(a, "touch_shuffle") == 0) tap(62, 446);                  /* Spotify only: the small shuffle button */
     else if (strcmp(a, "touch_repeat") == 0)  tap(418, 446);                 /* Spotify only: the small repeat button */
+    else if (strcmp(a, "touch_pair") == 0)       tap(345, 306);              /* the pairing prompt's Pair button (a real tap through the input path) */
+    else if (strcmp(a, "touch_paircancel") == 0) tap(135, 306);              /* ... and its Cancel button */
     else if (strcmp(a, "key_up") == 0 || strcmp(a, "key_down") == 0) {       /* as if the upper / lower side button was pressed */
         app_side_key(a[4] == 'u' ? SIDE_KEY_UP : SIDE_KEY_DOWN);
         if (s_shot_mid) {
@@ -181,6 +194,11 @@ void dev_tools_handle(const char *what)
 {
     if (strcmp(what, "screenshot") == 0) {
         xTaskCreatePinnedToCore(shot_task, "shot", 6144, NULL, 2, NULL, 0);
+    } else if (strcmp(what, "pair_shot") == 0) {
+        xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
+    } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {
+        ESP_LOGI(TAG, "debug action: %s", what);
+        ui_pairing_debug_press(strcmp(what, "pair_accept") == 0);
     } else if (strncmp(what, "tap_", 4) == 0) {
         ESP_LOGI(TAG, "debug tap: %s", what + 4);
         ui_debug_tap(what + 4);
