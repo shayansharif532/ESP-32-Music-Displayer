@@ -150,7 +150,7 @@ companion refuses the request if that session is gone: a command never reaches a
 | `GET /volume`, `POST /volume?level=0..100`, `POST /control/volume-up\|volume-down[?step=5]` | the displayed application's own Windows audio-session volume (never the master volume) |
 | `GET /sources` | the vertical swipe list: the usable sessions plus the synthetic `idle` item |
 | `POST /control/source-next\|source-prev[?from=<app>]`, `POST /control/source-auto` | vertical swipe / back to automatic following |
-| `GET /idle`, `GET /idle/image` | idle-screen settings (+ version) and the ready-made 480x480 baseline JPEG (`X-Idle-Crc`); there is no HTTP route that *changes* them |
+| `GET /idle`, `GET /idle/image` | idle-screen settings (+ version; among them `date`: show the date, default true, and `date_fmt`: 0 `Oct 13, 2026`, 1 `13 Oct 2026`, 2 `10/13/2026`, 3 `13/10/2026`; English month names, never localised) and the ready-made 480x480 baseline JPEG (`X-Idle-Crc`); there is no HTTP route that *changes* them. The date is the calendar day of `clock_ms` (local time, so DST and odd offsets need nothing on the display): `companion/tests/data/idle_date_vectors.json` holds shared test vectors |
 | `GET /health` | `{"ok":true,"service":"desk-media-companion","version":"..."}` (unauthenticated, reveals nothing else) |
 
 Limits: requests are small by construction (no body on control routes); `size` is clamped to 16..600 and `maxw` to 16..800; at most

@@ -40,7 +40,7 @@ images and the two sources are silent mock sessions; nothing here comes from a r
   **multiple simultaneous sessions** (for example Spotify and a browser tab). A manual source choice is temporary and never disables auto-follow.
 * **Spotify shuffle / repeat** through the Windows-native session controls (Spotify desktop only; no OAuth).
 * **Per-application volume**, never the master volume; the two hardware side buttons are the volume keys.
-* **Customizable idle screen** when nothing plays: Minimal / Dark / Neon / Photo themes, accent colour, clock (12 / 24 h), one custom line,
+* **Customizable idle screen** when nothing plays: Minimal / Dark / Neon / Photo themes, accent colour, clock (12 / 24 h), date (four formats, can be hidden), one custom line,
   a picture background with Fill / Fit / Blur Fill. Configured in the companion's tray Settings window; no reflashing.
 * **The idle screen is a selectable item of the source carousel** (`Spotify <-> Chrome <-> Idle Screen`): a display choice only, media keeps playing.
 * **Persistent idle image and settings** (NVS plus a dedicated flash partition): they survive reboots of the display, the companion and Windows.
