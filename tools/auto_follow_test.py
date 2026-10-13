@@ -2,7 +2,7 @@
 """Isolated end-to-end test of the AUTO / MANUAL_TEMP source selection and of Spotify's shuffle / repeat controls (no board needed).
 
 It starts its own companion on port 8790 that sees ONLY two silent fake media sessions - A = python.exe (treated as "Spotify" through
-the dev flag --treat-as-spotify) and B = deskfakeb.exe (the "YouTube") - so neither the owner's real sessions nor the real display are
+the dev flag --treat-as-spotify) and B = deskfakeb.exe (the "YouTube") - so neither the user's real sessions nor the real display are
 involved. Everything goes through the real companion code and the real Windows media-session API (GSMTC); the fakes obey play / pause /
 seek / shuffle / repeat like real apps.
 
@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -105,8 +106,9 @@ def start(app, paused):
 
 
 def main() -> int:
+    data_dir = tempfile.mkdtemp(prefix="auto-follow-test-")             # own settings / pairing store: nothing is written to the real one
     comp = subprocess.Popen([fakes.VENV_PY, "-m", "desk_media_companion", "--port", str(PORT), "--no-discovery", "--quiet",
-                             "--only-apps", f"{A},{B}", "--treat-as-spotify", A],
+                             "--only-apps", f"{A},{B}", "--treat-as-spotify", A, "--data-dir", data_dir],
                             cwd=os.path.join(ROOT, "companion"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if not wait_for(lambda: http("GET", "/health").get("ok"), 15.0, 0.5):

@@ -25,6 +25,53 @@ def _setup_logging(console: bool, debug: bool = False) -> str:
     return path
 
 
+def _pair_console(pairing) -> None:
+    """Headless pairing (--pair-console): prints the code once the display has revealed it and reads y / n from stdin. The code goes to
+    the console only - never into the log file."""
+    import time
+    prompted = False
+    while True:
+        snap = pairing.snapshot()
+        if snap["state"] == "paired":
+            print("Display paired.", flush=True)
+            return
+        if snap["code"] and not prompted:
+            prompted = True
+            print(f"Pairing offer: code {snap['code']} - confirm? [y/N]", flush=True)
+            try:
+                answer = sys.stdin.readline().strip().lower() if sys.stdin is not None else ""
+            except (OSError, ValueError):
+                answer = ""
+            if answer in ("y", "yes"):
+                print("Confirmed." if pairing.pc_confirm() else "Too late: the offer is gone.", flush=True)
+            else:
+                pairing.pc_cancel()
+                print("Cancelled.", flush=True)
+            continue
+        if snap["state"] in ("cancelled", "expired") or not snap["window_open"]:
+            print("The pairing window closed without a pairing.", flush=True)
+            return
+        time.sleep(0.3)
+
+
+_instance_lock = None        # keeps the named mutex alive for the life of the process
+
+
+def _single_instance(port: int) -> bool:
+    """False when another companion already serves this port. (On Windows two sockets may share a listening port when
+    SO_REUSEADDR is set, so a failed bind is not a reliable "already running" signal: a second auto-started copy would
+    silently share the port and answer some requests with its own, differently paired, state.)"""
+    global _instance_lock
+    if os.name != "nt":
+        return True
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)           # type: ignore[attr-defined]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    _instance_lock = kernel32.CreateMutexW(None, 0, f"Local\\DeskMediaCompanion-{port}")
+    return ctypes.get_last_error() != 183                                # ERROR_ALREADY_EXISTS
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="desk-media-companion", description=__doc__)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP port for the display (default %(default)s)")
@@ -44,7 +91,13 @@ def main(argv: list[str] | None = None) -> int:
                                                      "sessions python.exe,deskfakeb.exe, so tests do not show up on the real display")
     ap.add_argument("--no-tray", action="store_true", help="no system-tray icon / settings window (tests, headless runs)")
     ap.add_argument("--open-settings", action="store_true", help="open the Idle Screen settings window at start (it is always reachable from the tray icon)")
-    ap.add_argument("--data-dir", default="", help="where the idle-screen settings and picture are kept (default: the DeskMediaCompanion folder in your Local AppData)")
+    ap.add_argument("--data-dir", default="", help="where the idle-screen settings, the picture and the pairing key are kept (default: the DeskMediaCompanion "
+                                                   "folder in your Local AppData)")
+    ap.add_argument("--bind", default="0.0.0.0", metavar="ADDR",   # nosec B104: all interfaces by design (private clients only, paired)
+                    help="local address the HTTP API listens on (default %(default)s = every interface; only private / loopback / "
+                         "link-local clients are served either way, and all but this PC itself must be paired). 127.0.0.1 = this PC only")
+    ap.add_argument("--pair-console", action="store_true", help="headless pairing: open the pairing window at start (120 s); the code is printed "
+                                                                "here and y / n on stdin confirms or cancels (no tray needed)")
     ap.add_argument("--probe", action="store_true", help="print the current media state once and exit")
     ap.add_argument("--install-startup", action="store_true", help="start automatically when you log in to Windows")
     ap.add_argument("--remove-startup", action="store_true", help="undo --install-startup")
@@ -84,11 +137,21 @@ def main(argv: list[str] | None = None) -> int:
     store = IdleStore(os.path.join(args.data_dir, "idle") if args.data_dir else None)
     log.info("idle screen settings: %s (version %d, theme %s)", store.dir, store.version, store.settings().theme)
 
+    from .pairing import Pairing, PairingStore
+    pairing = Pairing(PairingStore(args.data_dir or None))
+    log.info("display: %s", "paired" if pairing.paired else "not paired")
+
+    if not _single_instance(args.port):
+        log.error("another Desk Media Companion is already running on port %d", args.port)
+        if sys.stderr is not None:
+            print(f"Another Desk Media Companion is already running on port {args.port}.", file=sys.stderr)
+        return 2
+
     from .server import make_server
     try:
-        server = make_server(monitor, args.port, dev_tools=args.dev_tools, idle=store)
+        server = make_server(monitor, args.port, dev_tools=args.dev_tools, idle=store, pairing=pairing, bind=args.bind)
     except OSError as exc:
-        log.error("cannot listen on port %d (already running?): %s", args.port, exc)
+        log.error("cannot listen on %s:%d (already running?): %s", args.bind, args.port, exc)
         if sys.stderr is not None:
             print(f"Cannot listen on port {args.port}: {exc}", file=sys.stderr)
         return 2
@@ -96,16 +159,19 @@ def main(argv: list[str] | None = None) -> int:
     beacon = None
     if not args.no_discovery:
         from .discovery import Beacon
-        beacon = Beacon(args.port, args.discovery_port)
+        beacon = Beacon(args.port, args.discovery_port, pairing)
         beacon.start()
 
-    log.info("Desk Media Companion %s listening on 0.0.0.0:%d (log: %s)", __version__, args.port, log_path)
+    log.info("Desk Media Companion %s listening on %s:%d (log: %s)", __version__, args.bind, args.port, log_path)
+    import threading
+    if args.pair_console:
+        pairing.open_window()
+        threading.Thread(target=_pair_console, args=(pairing,), name="pair-console", daemon=True).start()
     tray = None
     if not args.no_tray:
-        import threading
         from . import ui
-        window = ui.SettingsWindow(store)
-        tray = ui.start_tray(window, on_quit=lambda: threading.Thread(target=server.shutdown, daemon=True).start())
+        window = ui.SettingsWindow(store, pairing)
+        tray = ui.start_tray(window, on_quit=lambda: threading.Thread(target=server.shutdown, daemon=True).start(), pairing=pairing)
         if args.open_settings:
             window.open()
     try:

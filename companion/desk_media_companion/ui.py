@@ -1,16 +1,20 @@
-"""The companion's small user interface: a system-tray icon with "Settings", and the Idle Screen settings window.
+"""The companion's small user interface: a system-tray icon with "Settings", "Pair a display..." and "Forget paired display", the
+Idle Screen settings window and the pairing dialog.
 
 No command-line options are needed for any of it. The window edits an `IdleStore` (idle.py); "Apply" stores the settings and the
-display picks them up within a second (it sees the new `idle_v` in its next /now-playing answer).
+display picks them up within a second (it sees the new `idle_v` in its next /now-playing answer). The pairing dialog drives a
+`Pairing` (pairing.py): it opens the pairing window, shows the 6-digit code once the display has revealed it, and the Pair / Cancel
+buttons are the user's side of the confirmation.
 
-tkinter (the window) is in the Python standard library; pystray (the tray icon) is optional - without it the companion still runs,
-just without the icon (`--settings` opens the window directly).
+tkinter (the windows) is in the Python standard library; pystray (the tray icon) is optional - without it the companion still runs,
+just without the icon (`--settings` opens the window directly, `--pair-console` pairs without any UI).
 """
 from __future__ import annotations
 
 import dataclasses
 import logging
 import threading
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 from PIL import Image, ImageDraw
@@ -18,11 +22,15 @@ from PIL import Image, ImageDraw
 from . import idle as idle_mod
 from .idle import (ACCENT_PRESETS, BG_MODE_LABELS, BG_MODES, DELAY_MAX, DELAY_MIN, THEME_LABELS, THEMES, IdleSettings, IdleStore,
                    ImageError)
+from .pairing import Pairing
 
 log = logging.getLogger("ui")
 
 PREVIEW = 240
 TITLE = "Desk Media Companion - Idle Screen"
+PAIR_TITLE = "Desk Media Companion - Pair a display"
+POLL_MS = 300
+RESULT_MS = 1500             # how long the dialog shows its result ("Paired" ...) before it closes itself
 
 
 def _make_dpi_aware() -> None:
@@ -36,8 +44,9 @@ def _make_dpi_aware() -> None:
 class SettingsWindow:
     """One settings window at a time; `open()` can be called from any thread (a second call just brings the window forward)."""
 
-    def __init__(self, store: IdleStore) -> None:
+    def __init__(self, store: IdleStore, pairing: Optional[Pairing] = None) -> None:
         self.store = store
+        self.pairing = pairing
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._raise = threading.Event()
@@ -144,6 +153,9 @@ class SettingsWindow:
         spin = ttk.Spinbox(left, from_=DELAY_MIN, to=DELAY_MAX, textvariable=delay_var, width=5, command=lambda: refresh())
         spin.grid(row=6, column=1, sticky="w", **pad)
         ttk.Label(left, text="seconds of nothing playing").grid(row=6, column=2, sticky="w")
+        pair_var = tk.StringVar(value="")
+        if self.pairing is not None:                                 # one line: is a display paired (pair / forget it from the tray menu)
+            ttk.Label(left, textvariable=pair_var, foreground="#666").grid(row=7, column=0, columnspan=3, sticky="w", **pad)
 
         # preview
         ttk.Label(right, text="Preview").grid(row=0, column=0, sticky="w")
@@ -269,6 +281,8 @@ class SettingsWindow:
             refresh()
 
         def poll_raise() -> None:
+            if self.pairing is not None:
+                pair_var.set("Display: paired" if self.pairing.paired else "Display: not paired")
             if self._raise.is_set():
                 self._raise.clear()
                 root.deiconify()
@@ -286,6 +300,147 @@ class SettingsWindow:
         root.mainloop()
 
 
+# ---- pairing dialog ------------------------------------------------------------------------------------------------------
+
+def pairing_view(snap: dict) -> dict:
+    """What the pairing dialog shows for a `Pairing.snapshot()`: headline, detail, the code ("" until it exists), whether the Pair
+    button works, and `done` = the final message once the pairing is over ("Paired" / "Cancelled" / "Timed out"), else None."""
+    state, code = snap.get("state", "idle"), snap.get("code") or ""
+    view = {"headline": "", "detail": "", "code": code, "can_pair": False, "done": None}
+    if state == "paired":
+        view["done"] = "Paired"
+    elif state == "cancelled":
+        view["done"] = "Cancelled"
+    elif state == "expired" or (state == "idle" and not snap.get("window_open")):
+        view["done"] = "Timed out"
+    elif state == "idle":
+        view.update(headline="Waiting for the display...", detail="Open the pairing prompt on it.")
+    elif state == "offered":
+        view.update(headline="A display is connecting...", detail="")
+    elif state == "waiting_device":
+        view.update(headline="Waiting for the display...", detail="Tap Pair on the display too, once its code matches.")
+    else:                                                     # revealed / waiting_pc: the code exists
+        view.update(headline="Check that the display shows the same code", detail="Only click Pair if the two codes are identical.",
+                    can_pair=True)
+    return view
+
+
+class PairDialog:
+    """The "Pair a display..." window: opens the pairing window, shows the code, Pair / Cancel; closes itself with a result message.
+    One at a time; `open()` can be called from any thread (a second call brings the dialog forward)."""
+
+    def __init__(self, pairing: Pairing) -> None:
+        self.pairing = pairing
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._raise = threading.Event()
+
+    def open(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                self._raise.set()
+                return
+            self._thread = threading.Thread(target=self._run, name="pair-ui", daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            import tkinter as tk
+        except ImportError as exc:                                  # a Python without Tk
+            log.error("the pairing dialog needs tkinter: %s", exc)
+            return
+        _make_dpi_aware()
+        self.pairing.open_window()
+        root = tk.Tk()
+        self.attach(root)
+        root.mainloop()
+
+    def attach(self, root) -> SimpleNamespace:
+        """Builds the dialog in `root` and starts polling the Pairing (separate from _run so a test can drive it with a fake).
+        Returns the widgets' variables and the poll / cancel functions."""
+        import tkinter as tk
+        from tkinter import ttk
+        pairing = self.pairing
+        root.title(PAIR_TITLE)
+        root.resizable(False, False)
+        head_var, detail_var, code_var, timer_var = tk.StringVar(), tk.StringVar(), tk.StringVar(), tk.StringVar()
+        frame = ttk.Frame(root, padding=18)
+        frame.grid(row=0, column=0)
+        ttk.Label(frame, textvariable=head_var, font=("Segoe UI", 12, "bold"), wraplength=340, justify="center").grid(row=0, column=0, columnspan=2)
+        code_label = ttk.Label(frame, textvariable=code_var, font=("Consolas", 44, "bold"), anchor="center")
+        code_label.grid(row=1, column=0, columnspan=2, pady=10)
+        ttk.Label(frame, textvariable=detail_var, wraplength=340, justify="center", foreground="#555").grid(row=2, column=0, columnspan=2)
+        ttk.Label(frame, textvariable=timer_var, foreground="#888").grid(row=3, column=0, columnspan=2, pady=(8, 10))
+        pair_btn = ttk.Button(frame, text="Pair", command=lambda: pairing.pc_confirm())
+        pair_btn.grid(row=4, column=0, padx=6, sticky="e")
+        cancel_btn = ttk.Button(frame, text="Cancel", command=lambda: cancel())
+        cancel_btn.grid(row=4, column=1, padx=6, sticky="w")
+        state = {"closing": False}
+
+        def finish(message: str) -> None:
+            if state["closing"]:
+                return
+            state["closing"] = True
+            head_var.set(message)
+            code_var.set("")
+            detail_var.set("")
+            timer_var.set("")
+            pair_btn.state(["disabled"])
+            cancel_btn.state(["disabled"])
+            root.after(RESULT_MS, root.destroy)
+
+        def cancel() -> None:
+            pairing.pc_cancel()
+            finish("Cancelled")
+
+        def poll() -> None:
+            if state["closing"]:
+                return
+            snap = pairing.snapshot()
+            view = pairing_view(snap)
+            if view["done"]:
+                finish(view["done"])
+                return
+            head_var.set(view["headline"])
+            detail_var.set(view["detail"])
+            code_var.set(view["code"])
+            pair_btn.state(["!disabled"] if view["can_pair"] else ["disabled"])
+            timer_var.set(f"Closes in {snap.get('seconds_left', 0)} s")
+            if self._raise.is_set():
+                self._raise.clear()
+                root.deiconify()
+                root.lift()
+            root.after(POLL_MS, poll)
+
+        root.protocol("WM_DELETE_WINDOW", cancel)
+        root.attributes("-topmost", True)                          # the code must be seen while the user looks at the display
+        poll()
+        return SimpleNamespace(head=head_var, detail=detail_var, code=code_var, pair_button=pair_btn, cancel_button=cancel_btn,
+                               poll=poll, cancel=cancel, state=state)
+
+
+def forget_with_confirmation(pairing: Pairing) -> None:
+    """"Forget paired display": asks first, then deletes the key. Runs in its own thread (called from the tray's menu thread)."""
+    def run() -> None:
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+        except ImportError as exc:
+            log.error("the confirmation needs tkinter: %s", exc)
+            return
+        _make_dpi_aware()
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            if messagebox.askyesno(PAIR_TITLE, "Forget the paired display?\n\nIt will no longer be able to read what is playing "
+                                               "until you pair it again.", parent=root):
+                pairing.forget()
+        finally:
+            root.destroy()
+    threading.Thread(target=run, name="forget-ui", daemon=True).start()
+
+
 # ---- tray icon -------------------------------------------------------------------------------------------------------------
 
 def make_tray_icon_image(size: int = 64) -> Image.Image:
@@ -299,7 +454,7 @@ def make_tray_icon_image(size: int = 64) -> Image.Image:
     return img.resize((size, size), Image.LANCZOS)
 
 
-def start_tray(window: SettingsWindow, on_quit: Callable[[], None]):
+def start_tray(window: SettingsWindow, on_quit: Callable[[], None], pairing: Optional[Pairing] = None):
     """Puts the companion's icon in the Windows notification area. Returns the pystray icon, or None when pystray is not available."""
     try:
         import pystray
@@ -318,12 +473,16 @@ def start_tray(window: SettingsWindow, on_quit: Callable[[], None]):
         icon.stop()
         on_quit()
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Settings...", lambda icon, item: window.open(), default=True),
-        pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: autostart.is_installed()),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit Desk Media Companion", quit_app),
-    )
+    items = [pystray.MenuItem("Settings...", lambda icon, item: window.open(), default=True)]
+    if pairing is not None:
+        dialog = PairDialog(pairing)
+        items += [pystray.MenuItem("Pair a display...", lambda icon, item: dialog.open()),
+                  pystray.MenuItem("Forget paired display", lambda icon, item: forget_with_confirmation(pairing),
+                                   enabled=lambda item: pairing.paired)]
+    items += [pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: autostart.is_installed()),
+              pystray.Menu.SEPARATOR,
+              pystray.MenuItem("Quit Desk Media Companion", quit_app)]
+    menu = pystray.Menu(*items)
     icon = pystray.Icon("DeskMediaCompanion", make_tray_icon_image(), "Desk Media Companion", menu)
     icon.run_detached()
     return icon

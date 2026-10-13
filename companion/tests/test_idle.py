@@ -60,7 +60,7 @@ class Settings(unittest.TestCase):
         self.assertTrue(s.show_clock)
 
     def test_bad_values_are_replaced(self):
-        s = IdleSettings(theme="cyberpunk", accent="red", delay_s=9999, bg_mode="stretch", text="a" * 100).validated()
+        s = IdleSettings(theme="no-such-theme", accent="red", delay_s=9999, bg_mode="stretch", text="a" * 100).validated()
         self.assertEqual(s.theme, "dark")
         self.assertEqual(s.accent, idle.DEFAULT_ACCENT)
         self.assertEqual(s.delay_s, idle.DELAY_MAX)

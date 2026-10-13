@@ -9,7 +9,7 @@ its serial log (screen transitions, settings sync, health) and, where it matters
     set DESK_VENV=C:\\path\\to\\companion\\.venv          (only when this is a git worktree without its own venv)
     companion\\.venv\\Scripts\\python.exe tools\\idle_test.py [--port COM5] [--soak-cycles 30] [--skip-soak]
 
-Checks (numbers = the owner's list): 1 idle when nothing plays, 2 a starting session leaves idle at once, 3 A pauses / B plays -> B,
+Checks (numbers = the user's list): 1 idle when nothing plays, 2 a starting session leaves idle at once, 3 A pauses / B plays -> B,
 4 everything pauses -> idle after the delay (and not during a short gap), 5 the picture survives a board reboot without being resent,
 6 settings survive a companion restart, 7 Fill / Fit / Blur Fill, 8 the clock, 9 broken / missing picture falls back, 10 a repeated
 idle <-> playback soak with heap / stack / reset accounting.
@@ -44,6 +44,7 @@ from desk_media_companion import idle as idle_mod  # noqa: E402
 from desk_media_companion import volume as app_volume  # noqa: E402
 from desk_media_companion.discovery import Beacon  # noqa: E402
 from desk_media_companion.media import MediaMonitor  # noqa: E402
+from desk_media_companion.pairing import Pairing, PairingStore  # noqa: E402
 from desk_media_companion.server import make_server  # noqa: E402
 
 PORT, DISCOVERY = 8765, 8766
@@ -180,6 +181,7 @@ class Companion:
         self.monitor.only_apps = {A, B}
         self.monitor.spotify_ids = {A}
         self.monitor.start()
+        self.pairing = Pairing(PairingStore())                         # the DEFAULT store: the board stays paired with the normal companion's key
         self.calls: list[tuple] = []                                   # every media command / volume request that reached the companion
         real_control, real_volume = self.monitor.control, self.monitor.volume
 
@@ -213,7 +215,7 @@ class Companion:
             return real_image()
 
         self.store.config, self.store.image = config, image          # count the board's downloads
-        self.server = make_server(self.monitor, PORT, dev_tools=True, idle=self.store)
+        self.server = make_server(self.monitor, PORT, dev_tools=True, idle=self.store, pairing=self.pairing)
         orig_get_request = self.server.get_request
         self.conns = []
 
@@ -225,7 +227,7 @@ class Companion:
         self.server.get_request = tracking_get_request
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         if self.beacon is None:
-            self.beacon = Beacon(PORT, DISCOVERY)
+            self.beacon = Beacon(PORT, DISCOVERY, self.pairing)
             self.beacon.start()
 
     def stop_http(self) -> None:

@@ -36,8 +36,13 @@ _SOLID = [255 if a >= 250 else 0 for a in range(256)]     # alpha -> mask of (ne
 _BRIGHT = [255 if v > 28 else 0 for v in range(256)]      # luminance -> mask of non-black pixels
 
 
+MAX_PIXELS = 36_000_000        # a media app's thumbnail is a few hundred pixels wide; a bigger one is a decompression bomb, not a cover
+
+
 def decode(raw: bytes) -> Image.Image:
     img = Image.open(io.BytesIO(raw))
+    if img.width * img.height > MAX_PIXELS:         # the header alone tells the size: refuse before any pixel is decoded
+        raise ValueError(f"artwork too large ({img.width}x{img.height})")
     img.load()
     img = ImageOps.exif_transpose(img)
     if img.mode in ("P", "PA", "LA", "L", "I;16", "CMYK"):

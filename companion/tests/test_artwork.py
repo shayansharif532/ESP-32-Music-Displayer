@@ -168,5 +168,22 @@ class Upscaling(unittest.TestCase):
         self.assertNotEqual(mild.tobytes(), full.tobytes())
 
 
+class DecodeLimits(unittest.TestCase):
+    def test_an_absurdly_large_image_is_refused_before_it_is_decoded(self):
+        buf = io.BytesIO()
+        Image.new("1", (8000, 8000)).save(buf, "PNG")               # 64 Mpx, tiny on the wire (a decompression bomb in miniature)
+        with self.assertRaises(ValueError):
+            artwork.decode(buf.getvalue())
+
+    def test_a_normal_thumbnail_decodes(self):
+        buf = io.BytesIO()
+        gradient_cover(150).save(buf, "PNG")
+        self.assertEqual(artwork.decode(buf.getvalue()).size, (150, 150))
+
+    def test_garbage_is_an_error_not_a_crash(self):
+        with self.assertRaises(Exception):
+            artwork.decode(b"not an image")
+
+
 if __name__ == "__main__":
     unittest.main()

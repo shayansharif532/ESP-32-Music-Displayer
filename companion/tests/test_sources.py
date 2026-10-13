@@ -12,10 +12,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from desk_media_companion import sources as m                       # noqa: E402
 from desk_media_companion.sources import Source                      # noqa: E402
 
-SPOTIFY = Source("Spotify.exe", "playing", "Ready", "Lil Baby")
-CHROME = Source("chrome.exe", "paused", "Always Lone", "Men I Trust")
+SPOTIFY = Source("Spotify.exe", "playing", "Ready", "Test Artist")
+CHROME = Source("chrome.exe", "paused", "Sample Video", "Demo Channel")
 EDGE = Source("msedge.exe", "paused", "Some video", "Channel")
-DEAD = Source("PSExpressCore.exe", "", readable=False)
+DEAD = Source("DeadSession.exe", "", readable=False)
 BLANK = Source("blank.exe", "stopped", "", "")
 
 
@@ -132,7 +132,7 @@ class Candidates(unittest.TestCase):
 
     def test_every_session_appears_once(self):
         order = m.candidate_order([SPOTIFY, CHROME, EDGE, DEAD], current="chrome.exe", manual="msedge.exe", last_playing="Spotify.exe")
-        self.assertEqual(sorted(order), sorted(["Spotify.exe", "chrome.exe", "msedge.exe", "PSExpressCore.exe"]))
+        self.assertEqual(sorted(order), sorted(["Spotify.exe", "chrome.exe", "msedge.exe", "DeadSession.exe"]))
 
 
 def S(app, state, title="t", artist="a"):
@@ -165,7 +165,7 @@ class AutoOrder(unittest.TestCase):
 
 
 class Machine(unittest.TestCase):
-    """The AUTO / MANUAL_TEMP state machine on scripted timelines (cases A-E of the owner's request)."""
+    """The AUTO / MANUAL_TEMP state machine on scripted timelines (cases A-E of the auto-follow specification)."""
 
     def setUp(self):
         self.sel = m.Selector(idle_return_s=20.0)

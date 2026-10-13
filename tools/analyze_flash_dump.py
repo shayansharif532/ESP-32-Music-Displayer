@@ -8,7 +8,7 @@ path = sys.argv[1]
 data = open(path, "rb").read()
 print(f"size            : {len(data):,} bytes ({len(data) / 1048576:.2f} MiB)")
 print(f"sha256          : {hashlib.sha256(data).hexdigest()}")
-print(f"md5             : {hashlib.md5(data).hexdigest()}")
+print(f"md5             : {hashlib.md5(data, usedforsecurity=False).hexdigest()}")
 
 last = len(data) - 1
 while last > 0 and data[last] == 0xFF:

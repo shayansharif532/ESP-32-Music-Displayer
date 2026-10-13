@@ -4,8 +4,10 @@
 """
 import json
 import os
+import socket
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -18,6 +20,7 @@ from desk_media_companion.server import make_server  # noqa: E402
 class StubMonitor:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.art_calls: list[tuple] = []
 
     def now_playing(self):
         return {"ok": True, "has_session": True, "app": "Spotify.exe"}
@@ -42,6 +45,7 @@ class StubMonitor:
         return {"ok": True, "sources": []}
 
     def artwork(self, size=300, max_w=None):
+        self.art_calls.append((size, max_w))
         return None
 
 
@@ -127,6 +131,177 @@ class Api(unittest.TestCase):
 
     def test_unknown_control_is_404(self):
         self.assertEqual(self.req("POST", "/control/explode")[0], 404)
+
+
+class Hardening(unittest.TestCase):
+    """Bounded input: Content-Length parsing, body limits, parameter clamps, fixed error texts, the connection cap, no CORS.
+    (Loopback client, so no signature is involved: that is test_pairing.py.)"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mon = StubMonitor()
+        cls.server = make_server(cls.mon, 0, bind="127.0.0.1")
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        self.mon.calls.clear()
+        self.mon.art_calls.clear()
+
+    def raw(self, data: bytes) -> bytes:
+        """Raw bytes in, everything the server answers until it closes the connection out (requests here say Connection: close)."""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+            s.sendall(data)
+            chunks = []
+            try:
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except ConnectionError:
+                pass
+        return b"".join(chunks)
+
+    def post(self, headers: str, body: bytes = b"", path: str = "/control/next") -> bytes:
+        return self.raw((f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nX-Desk-Client: t\r\nConnection: close\r\n{headers}\r\n").encode()
+                        + body)
+
+    @staticmethod
+    def status(answer: bytes) -> int:
+        return int(answer.split(b" ", 2)[1])
+
+    def get(self, path: str):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode() or "{}")
+
+    def test_a_malformed_content_length_is_400_and_closes_the_connection(self):
+        for value in ("abc", "-1", "+5", "1e3", "1_0", "", " ", "0x10", "99999999999", "5 5", "٣"):
+            with self.subTest(value=value):
+                answer = self.post(f"Content-Length: {value}\r\n")
+                self.assertEqual(self.status(answer), 400, value)
+                self.assertIn(b"connection: close", answer.lower())
+        self.assertEqual(self.status(self.post("Content-Length: 3\r\nContent-Length: 3\r\n", b"abc")), 400)     # two of them
+        self.assertEqual(self.mon.calls, [])
+
+    def test_a_chunked_body_is_refused(self):
+        answer = self.post("Transfer-Encoding: chunked\r\n", b"0\r\n\r\n")
+        self.assertEqual(self.status(answer), 400)
+        self.assertEqual(self.mon.calls, [])
+
+    def test_bodies_over_4096_bytes_are_413_and_closed_before_they_are_read(self):
+        for length in (4097, 5000, 10 ** 9 - 1):
+            answer = self.post(f"Content-Length: {length}\r\n")                    # no body sent: the server must not wait for one
+            self.assertEqual(self.status(answer), 413, length)
+            self.assertIn(b"connection: close", answer.lower())
+        self.assertEqual(self.mon.calls, [])
+
+    def test_a_body_of_exactly_4096_bytes_is_still_accepted_and_ignored(self):
+        answer = self.post("Content-Length: 4096\r\n", b"x" * 4096)
+        self.assertEqual(self.status(answer), 200)
+        self.assertEqual(self.mon.calls, [("control", "next", None, "")])
+
+    def test_a_short_body_does_not_hang_or_crash_the_server(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+            s.sendall(f"POST /control/next HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nX-Desk-Client: t\r\nContent-Length: 100\r\n\r\nshort".encode())
+            s.shutdown(socket.SHUT_WR)                                           # the client hangs up after 5 of 100 bytes
+            self.assertEqual(s.recv(4096), b"")
+        self.assertEqual(self.mon.calls, [])
+        self.assertEqual(self.get("/health")[0], 200)
+
+    def test_too_many_query_fields_are_400(self):
+        self.assertEqual(self.get("/now-playing?" + "&".join(f"a{i}=1" for i in range(40)))[0], 400)
+        self.assertEqual(self.get("/now-playing?" + "&".join(f"a{i}=1" for i in range(10)))[0], 200)
+
+    def test_artwork_parameters_are_clamped(self):
+        for query, expected in (("size=312&maxw=432", (312, 432)), ("size=100000&maxw=999999", (600, 800)), ("size=1&maxw=-5", (16, 16)),
+                                ("size=abc&maxw=xyz", (300, None)), ("", (300, None)), ("size=-40", (16, None)), ("maxw=5000", (300, 800)),
+                                ("size=" + "9" * 5000, (300, None)), ("size=%E0%A4%A&maxw=%00", (300, None))):
+            self.mon.art_calls.clear()
+            self.assertEqual(self.get("/artwork?" + query)[0], 404)                  # the stub has no artwork; only the clamped call matters
+            self.assertEqual(self.mon.art_calls, [expected], query[:30])
+
+    def test_volume_step_level_and_seek_position_are_clamped(self):
+        for query, expected_step in (("step=9999", 50), ("step=0", 1), ("step=-7", 1), ("step=abc", 5), ("", 5), ("step=12", 12)):
+            self.mon.calls.clear()
+            self.post("", path="/control/volume-up?" + query)
+            self.assertEqual(self.mon.calls, [("volume", "volume-up", expected_step, None, "")], query)
+        for query, expected in (("level=500", 100), ("level=-3", 0), ("level=40", 40)):
+            self.mon.calls.clear()
+            self.post("", path="/volume?" + query)
+            self.assertEqual(self.mon.calls, [("volume", "volume-set", 5, expected, "")], query)
+        for path in ("/volume?level=x", "/volume"):
+            self.assertEqual(self.status(self.post("", path=path)), 400)
+        for query, expected in (("position_ms=-5", 0), ("position_ms=99999999999999", 2 ** 31 - 1), ("position_ms=1234", 1234)):
+            self.mon.calls.clear()
+            self.post("", path="/control/seek?" + query)
+            self.assertEqual(self.mon.calls, [("control", "seek", expected, "")], query)
+        for path in ("/control/seek?position_ms=abc", "/control/seek"):
+            self.assertEqual(self.status(self.post("", path=path)), 400)
+
+    def test_error_answers_never_echo_the_request(self):
+        for answer in (self.raw(b"ZZMARKER /ZZMARKER HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),       # unknown method
+                       self.raw(b"GET /ZZMARKER HTTP/9.9\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),             # bad version
+                       self.raw(b"GET /ZZMARKER/ZZMARKER HTTP/1.1\r\nHost: ZZMARKER\r\nConnection: close\r\n\r\n"),     # bad Host
+                       self.raw(b"GET /ZZMARKER HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),             # unknown path
+                       self.post("", path="/control/ZZMARKER"), self.post("Content-Length: ZZMARKER\r\n")):
+            self.assertNotIn(b"ZZMARKER", answer)
+            if answer.startswith(b"HTTP/"):              # (the stock parser answers a bad protocol version without a status line)
+                self.assertGreaterEqual(self.status(answer), 400)
+            body = answer.split(b"\r\n\r\n", 1)[-1]
+            self.assertFalse(body and b"<html" in body.lower())                      # JSON, not the stock HTML error page
+            if body:
+                self.assertIs(json.loads(body)["ok"], False)
+
+    def test_the_server_header_does_not_name_the_python_version(self):
+        answer = self.raw(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        self.assertIn(b"Server: DeskMediaCompanion/", answer)
+        self.assertNotIn(b"Python", answer)
+
+    def test_options_is_405_without_any_cors_header(self):
+        answer = self.raw(b"OPTIONS /control/next HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n"
+                          b"Access-Control-Request-Method: POST\r\nConnection: close\r\n\r\n")
+        self.assertEqual(self.status(answer), 405)
+        self.assertNotIn(b"access-control", answer.lower())
+        self.assertIn(b"Allow: GET, HEAD, POST", answer)
+        answer = self.raw(b"GET /now-playing HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nConnection: close\r\n\r\n")
+        self.assertEqual(self.status(answer), 200)
+        self.assertNotIn(b"access-control", answer.lower())
+
+    def test_at_most_32_connections_are_served_at_once(self):
+        held = []
+        try:
+            for _ in range(32):
+                held.append(socket.create_connection(("127.0.0.1", self.port), timeout=5))
+            self.wait_until(lambda: self.server.active_connections == 32)
+            extra = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            held.append(extra)
+            extra.sendall(f"GET /health HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n\r\n".encode())
+            try:
+                self.assertEqual(extra.recv(4096), b"")                              # closed at once, not served
+            except ConnectionError:
+                pass
+            self.assertEqual(self.server.active_connections, 32)
+        finally:
+            for s in held:
+                s.close()
+        self.wait_until(lambda: self.server.active_connections == 0)               # the slots come back when the clients leave
+        self.assertEqual(self.get("/health")[0], 200)
+
+    def wait_until(self, predicate, timeout: float = 5.0) -> None:
+        end = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() > end:
+                self.fail("condition not reached")
+            time.sleep(0.01)
 
 
 class IdleItemGuards(unittest.TestCase):

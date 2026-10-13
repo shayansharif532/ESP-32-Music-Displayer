@@ -86,7 +86,7 @@ class MediaMonitor:
         self._last_sig = ""
         self.sel = src_model.Selector()  # AUTO / MANUAL_TEMP selection state machine (loop thread only)
         self.ignore_apps: set[str] = set()   # dev only: never look at these app ids (keeps fake test sessions off the real display)
-        self.only_apps: set[str] = set()     # dev only: ignore every session except these app ids (isolated tests next to the owner's real apps)
+        self.only_apps: set[str] = set()     # dev only: ignore every session except these app ids (isolated tests next to the user's real apps)
         self.spotify_ids: set[str] = set()   # dev only: extra app ids treated as Spotify (--treat-as-spotify python.exe, the fake session)
         self._any_playing = False          # some usable session is playing right now (the display leaves its idle screen for it)
         self._debug_lock = threading.Lock()
@@ -389,7 +389,7 @@ class MediaMonitor:
             if duration_ms:
                 pos_ms = min(pos_ms, duration_ms)
 
-            track_key = hashlib.sha1(f"{app}|{title}|{artist}|{album}|{duration_ms}".encode()).hexdigest()[:10]
+            track_key = hashlib.sha1(f"{app}|{title}|{artist}|{album}|{duration_ms}".encode(), usedforsecurity=False).hexdigest()[:10]
             await self._update_artwork(track_key, props)
 
             ctl = info.controls
@@ -491,7 +491,7 @@ class MediaMonitor:
         except Exception as exc:
             log.debug("thumbnail read failed (try %d): %s", self._art_tries, exc)
             return
-        art_id = hashlib.sha1(raw).hexdigest()[:10]
+        art_id = hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:10]
         with self._art_lock:
             self._art_img, self._art_id, self._art_cache = image, art_id, {}
         log.info("artwork loaded: %d bytes -> %dx%d, id %s%s", len(raw), image.width, image.height, art_id,
