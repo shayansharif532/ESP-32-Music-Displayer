@@ -75,6 +75,21 @@ static int64_t now_ms(void)
     return esp_timer_get_time() / 1000;
 }
 
+/* The SDK's connection monitor (SOF packets seen from a tick hook) can read "disconnected" for a moment when the CPU was held up, e.g. by a
+ * flash write: ride such a blip out instead of dropping frames or flipping the transport. A real unplug is reported after HOST_GRACE_MS. */
+#define HOST_GRACE_MS   400
+static volatile int64_t s_host_seen_ms;
+
+static bool host_present(void)
+{
+    const int64_t t = now_ms();
+    if (usb_serial_jtag_is_connected()) {
+        s_host_seen_ms = t;
+        return true;
+    }
+    return s_host_seen_ms != 0 && t - s_host_seen_ms < HOST_GRACE_MS;
+}
+
 /* ---- response buffer (PSRAM, grows on demand up to `max`) ---------------------------------------------------------------- */
 
 bool usb_link_buf_reserve(usb_link_buf_t *b, size_t total)
@@ -125,7 +140,7 @@ bool usb_link_buf_append(usb_link_buf_t *b, const void *data, size_t n)
 /* One frame, atomically with respect to every other sender. Not while no host is attached (nothing would ever read it). */
 static bool tx_frame(uint8_t type, uint8_t flags, uint8_t seq, uint16_t id, const void *payload, size_t len, int wait_ms)
 {
-    if (!usb_serial_jtag_is_connected()) {
+    if (!host_present()) {
         return false;
     }
     if (xSemaphoreTake(u.tx_lock, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
@@ -304,12 +319,12 @@ static void on_frame(const dm_frame_t *f, void *ctx)
     case DM_T_PONG:
         break;
     case DM_T_DEBUG:
-        if (u.debug_cb && f->len > 0 && f->len < 24) {              /* development builds: a short [a-z0-9_] action name, nothing else */
-            char name[24];
+        if (u.debug_cb && f->len > 0 && f->len < 400) {             /* development builds: an action name, optionally followed by a space and arguments */
+            char name[400];
             bool ok = true;
             for (uint16_t i = 0; i < f->len; i++) {
                 const char c = (char)f->payload[i];
-                ok = ok && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_');
+                ok = ok && c >= 0x20 && c < 0x7F;                    /* printable ASCII only */
                 name[i] = c;
             }
             name[f->len] = ' ';
@@ -355,7 +370,7 @@ static void tx_task(void *arg)
     int64_t next_beacon = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(40));
-        if (!usb_serial_jtag_is_connected()) {
+        if (!host_present()) {
             size_t n;                                       /* nobody can read it: do not keep stale log text for later */
             void *p;
             while ((p = xRingbufferReceiveUpTo(u.log_rb, &n, 0, LOG_FRAME_BYTES)) != NULL) {
@@ -390,7 +405,7 @@ static int link_vprintf(const char *fmt, va_list ap)
     int n = vsnprintf(line, sizeof line, fmt, copy);
     va_end(copy);
     int r = u.old_vprintf ? u.old_vprintf(fmt, ap) : n;
-    if (n > 0 && u.log_rb && usb_serial_jtag_is_connected()) {
+    if (n > 0 && u.log_rb && host_present()) {
         if (n >= (int)sizeof line) {
             n = (int)sizeof line - 1;
         }
@@ -422,15 +437,18 @@ void usb_link_log_install(void)
 
 bool usb_link_log_line(const char *line)
 {
-    if (!u.started || !usb_serial_jtag_is_connected()) {
+    if (!u.started || !host_present()) {
         return false;
     }
     const size_t n = strlen(line);
     for (size_t off = 0; off < n || off == 0; off += LOG_FRAME_BYTES) {
         size_t m = n - off < LOG_FRAME_BYTES ? n - off : LOG_FRAME_BYTES;
         bool sent = false;
-        for (int attempt = 0; attempt < 20 && !sent; attempt++) {
+        for (int attempt = 0; attempt < 40 && !sent; attempt++) {
             sent = tx_frame(DM_T_LOG, DM_F_FIRST | DM_F_LAST, 0, 0, line + off, m, 100);
+            if (!sent) {
+                vTaskDelay(pdMS_TO_TICKS(20));                      /* the host is slow or just blipped: wait instead of burning the attempts */
+            }
         }
         if (!sent) {
             return false;
@@ -446,7 +464,7 @@ bool usb_link_log_line(const char *line)
 
 usb_link_state_t usb_link_state(void)
 {
-    if (!u.started || !usb_serial_jtag_is_connected()) {
+    if (!u.started || !host_present()) {
         return USB_LINK_NO_HOST;
     }
     portENTER_CRITICAL(&u.mux);
@@ -509,7 +527,7 @@ esp_err_t usb_link_request(const char *method, const char *target, const char *b
     }
     memcpy(req + n, body ? body : "", blen);
     const size_t rlen = (size_t)n + blen;
-    if (!usb_serial_jtag_is_connected()) {
+    if (!host_present()) {
         xSemaphoreGive(u.req_lock);
         return ESP_ERR_INVALID_STATE;
     }

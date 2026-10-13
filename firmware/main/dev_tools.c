@@ -15,6 +15,7 @@
 #ifdef APP_DEV_TOOLS
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,7 +27,11 @@
 #include "mbedtls/base64.h"
 
 #include "bsp/esp-bsp.h"
+#include "cJSON.h"
 #include "dev_tools.h"
+#include "dmlink.h"
+#include "idle_date.h"
+#include "idle_screen.h"
 #include "side_keys.h"
 #include "lvgl.h"
 #include "ui.h"
@@ -87,6 +92,42 @@ static void shot_task(void *arg)
 {
     (void)arg;
     send_screenshot();
+    vTaskDelete(NULL);
+}
+
+/* "idle_cfg {json}": show the idle screen with exactly this configuration and clock, no companion involved:
+ *   {"clock_ms":1791849600000,"theme":"neon","accent":"#FF4FA3","clock":true,"clock_24h":false,"date":true,"date_fmt":1,"text":"Hello"}
+ * (the keys of the companion's GET /idle; clock_ms = the PC's local time as milliseconds). It is stored like a real sync (the companion
+ * replaces it at its next settings version), so tests that use it end by letting the companion send its own settings. */
+static void idle_cfg_task(void *arg)
+{
+    char *json = arg;
+    cJSON *j = cJSON_Parse(json);
+    if (j) {
+        const cJSON *ms = cJSON_GetObjectItemCaseSensitive(j, "clock_ms");
+        cJSON_DeleteItemFromObjectCaseSensitive(j, "version");
+        cJSON_DeleteItemFromObjectCaseSensitive(j, "ok");
+        cJSON_AddBoolToObject(j, "ok", true);
+        cJSON_AddNumberToObject(j, "version", 99999);
+        char *cfg = cJSON_PrintUnformatted(j);
+        if (cfg) {
+            if (cJSON_IsNumber(ms)) {
+                idle_screen_set_clock((int64_t)ms->valuedouble);
+            }
+            const int rc = idle_screen_apply_config(cfg, strlen(cfg));
+            ESP_LOGI(TAG, "idle_cfg applied (rc %d)", rc);
+            if (bsp_display_lock(2000)) {
+                idle_screen_activate(true);
+                lv_screen_load(idle_screen_obj());
+                bsp_display_unlock();
+            }
+            cJSON_free(cfg);
+        }
+        cJSON_Delete(j);
+    } else {
+        ESP_LOGW(TAG, "idle_cfg: the JSON could not be parsed");
+    }
+    free(json);
     vTaskDelete(NULL);
 }
 
@@ -204,6 +245,14 @@ void dev_tools_handle(const char *what)
 {
     if (strcmp(what, "screenshot") == 0) {
         xTaskCreatePinnedToCore(shot_task, "shot", 6144, NULL, 2, NULL, 0);
+    } else if (strcmp(what, "selftest") == 0) {                 /* the on-target self-tests of the pure code, reported in the log */
+        const char *a = dm_selftest(), *b = idle_date_selftest();
+        ESP_LOGI(TAG, "selftest dmlink: %s | idle date: %s", a ? a : "ok", b ? b : "ok");
+    } else if (strncmp(what, "idle_cfg ", 9) == 0) {
+        char *copy = strdup(what + 9);
+        if (copy && xTaskCreatePinnedToCore(idle_cfg_task, "idle_cfg", 6144, copy, 2, NULL, 0) != pdPASS) {
+            free(copy);
+        }
     } else if (strcmp(what, "pair_shot") == 0) {
         xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {

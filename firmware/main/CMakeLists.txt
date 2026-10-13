@@ -10,7 +10,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "." ".."                 # ".." = firmware/, where the git-ignored secrets.local.h lives
     REQUIRES ui idle_screen wifi_mgr pc_media side_keys usb_link
-    PRIV_REQUIRES nvs_flash esp_timer heap lvgl__lvgl waveshare__esp32_s3_touch_lcd_4b mbedtls esp_rom esp_app_format)
+    PRIV_REQUIRES json nvs_flash esp_timer heap lvgl__lvgl waveshare__esp32_s3_touch_lcd_4b mbedtls esp_rom esp_app_format)
 
 # Development builds only:  idf.py -DAPP_UI_DEMO=1 build   = a scripted fake player instead of the PC link (UI work without a PC)
 if(APP_UI_DEMO)
