@@ -5,6 +5,7 @@ there (the loopback exemption and the decision for real LAN addresses are tested
 
     companion\\.venv\\Scripts\\python.exe -m unittest discover -s companion/tests
 """
+import gc
 import http.client
 import json
 import os
@@ -1148,6 +1149,11 @@ class FakePairing:
 
 
 class PairDialog(unittest.TestCase):
+    def tearDown(self):
+        # A closed dialog leaves Tk variables behind as cyclic garbage. If a later test's server thread happens to run the garbage collector,
+        # each of them makes THAT thread wait about a second for this thread's (no longer running) main loop and the HTTP tests time out.
+        gc.collect()
+
     def test_the_view_for_every_state(self):
         view = ui_mod.pairing_view
         waiting = view({"state": "idle", "window_open": True})
