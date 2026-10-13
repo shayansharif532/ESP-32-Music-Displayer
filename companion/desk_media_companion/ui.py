@@ -67,16 +67,34 @@ class SettingsWindow:
     def _run(self) -> None:
         try:
             import tkinter as tk
-            from tkinter import colorchooser, filedialog, messagebox, ttk
-            from PIL import ImageTk
+            from PIL import ImageTk  # noqa: F401  (the preview needs it: fail here, before a window opens)
         except ImportError as exc:                                  # a Python without Tk
             log.error("the settings window needs tkinter: %s", exc)
             return
         _make_dpi_aware()
+        root = tk.Tk()
+        ui = self.attach(root)
+        root.mainloop()
+        del ui, root
+        import gc
+        gc.collect()          # finish off the window's Tk variables in this thread: collected from another thread (say the HTTP server's)
+                              # each one makes that thread wait about a second for a main loop that no longer runs
+
+    @staticmethod
+    def _today():
+        """Today's date on this PC (a method so a test can pretend it is another day)."""
+        import datetime
+        return datetime.date.today()
+
+    def attach(self, root) -> SimpleNamespace:
+        """Builds the window in `root` and starts its timers (separate from _run so a test can drive it with its own Tk root).
+        Returns the controls a test needs."""
+        import tkinter as tk
+        from tkinter import colorchooser, filedialog, messagebox, ttk
+        from PIL import ImageTk
         store = self.store
         cur = store.settings()
 
-        root = tk.Tk()
         root.title(TITLE)
         root.resizable(False, False)
         pad = {"padx": 10, "pady": 4}
@@ -85,12 +103,14 @@ class SettingsWindow:
         accent_var = tk.StringVar(value=cur.accent)
         clock_var = tk.BooleanVar(value=cur.show_clock)
         clock24_var = tk.BooleanVar(value=cur.clock_24h)
+        date_var = tk.BooleanVar(value=cur.show_date)
+        date_fmt_var = tk.StringVar(value=cur.date_format)               # the format's key; the drop-down shows it as today's date
         text_var = tk.StringVar(value=cur.text)
         delay_var = tk.IntVar(value=cur.delay_s)
         mode_var = tk.StringVar(value=cur.bg_mode)
         file_var = tk.StringVar(value=cur.image_name or "No picture chosen")
         status_var = tk.StringVar(value="")
-        state = {"raw": None, "name": "", "remove": False, "after": None, "cache": {}}
+        state = {"raw": None, "name": "", "remove": False, "after": None, "cache": {}, "today": None}
 
         left = ttk.Frame(root, padding=8)
         left.grid(row=0, column=0, sticky="n")
@@ -142,26 +162,33 @@ class SettingsWindow:
             ttk.Radiobutton(modes, text=BG_MODE_LABELS[m], value=m, variable=mode_var, command=lambda: refresh()).grid(row=0, column=i, padx=(0, 12))
         ttk.Label(pic, text="JPG or PNG. It is resized and prepared on this PC.", foreground="#666").grid(row=3, column=0, columnspan=3, padx=8, pady=(0, 6), sticky="w")
 
-        # clock / text / delay
+        # clock / date / text / delay
         ttk.Checkbutton(left, text="Show clock", variable=clock_var, command=lambda: refresh()).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
         ttk.Checkbutton(left, text="24-hour", variable=clock24_var, command=lambda: refresh()).grid(row=3, column=2, sticky="w", **pad)
-        ttk.Label(left, text="Custom line").grid(row=4, column=0, sticky="w", **pad)
+        date_frame = ttk.LabelFrame(left, text="Date")
+        date_frame.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=8)
+        ttk.Checkbutton(date_frame, text="Show the date", variable=date_var, command=lambda: date_toggled()).grid(
+            row=0, column=0, columnspan=2, padx=8, pady=(6, 2), sticky="w")
+        ttk.Label(date_frame, text="Format").grid(row=1, column=0, padx=(8, 6), pady=(2, 8), sticky="w")
+        date_box = ttk.Combobox(date_frame, state="readonly", width=30)
+        date_box.grid(row=1, column=1, pady=(2, 8), sticky="w")
+        ttk.Label(left, text="Custom line").grid(row=5, column=0, sticky="w", **pad)
         text_entry = ttk.Entry(left, textvariable=text_var, width=30)
-        text_entry.grid(row=4, column=1, columnspan=2, sticky="w", **pad)
-        ttk.Label(left, text="Letters, numbers and basic punctuation (max 40).", foreground="#666").grid(row=5, column=1, columnspan=2, sticky="w", padx=10)
-        ttk.Label(left, text="Show idle screen after").grid(row=6, column=0, sticky="w", **pad)
+        text_entry.grid(row=5, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(left, text="Letters, numbers and basic punctuation (max 40).", foreground="#666").grid(row=6, column=1, columnspan=2, sticky="w", padx=10)
+        ttk.Label(left, text="Show idle screen after").grid(row=7, column=0, sticky="w", **pad)
         spin = ttk.Spinbox(left, from_=DELAY_MIN, to=DELAY_MAX, textvariable=delay_var, width=5, command=lambda: refresh())
-        spin.grid(row=6, column=1, sticky="w", **pad)
-        ttk.Label(left, text="seconds of nothing playing").grid(row=6, column=2, sticky="w")
+        spin.grid(row=7, column=1, sticky="w", **pad)
+        ttk.Label(left, text="seconds of nothing playing").grid(row=7, column=2, sticky="w")
         pair_var = tk.StringVar(value="")
         if self.pairing is not None:                                 # one line: is a display paired (pair / forget it from the tray menu)
-            ttk.Label(left, textvariable=pair_var, foreground="#666").grid(row=7, column=0, columnspan=3, sticky="w", **pad)
+            ttk.Label(left, textvariable=pair_var, foreground="#666").grid(row=8, column=0, columnspan=3, sticky="w", **pad)
 
         # preview
         ttk.Label(right, text="Preview").grid(row=0, column=0, sticky="w")
         canvas = tk.Canvas(right, width=PREVIEW, height=PREVIEW, highlightthickness=1, highlightbackground="#999")
         canvas.grid(row=1, column=0, pady=4)
-        ttk.Label(right, text="Roughly how the display will look.\nThe clock shows the current time.", foreground="#666").grid(row=2, column=0, sticky="w")
+        ttk.Label(right, text="Roughly how the display will look.\nThe clock and date show this PC's time.", foreground="#666").grid(row=2, column=0, sticky="w")
         hint_var = tk.StringVar(value="")
         ttk.Label(right, textvariable=hint_var, foreground="#a60", wraplength=PREVIEW).grid(row=3, column=0, sticky="w", pady=(6, 0))
 
@@ -184,7 +211,30 @@ class SettingsWindow:
             except (tk.TclError, ValueError):
                 delay = cur.delay_s
             return dataclasses.replace(store.settings(), theme=theme_key(), accent=accent_var.get(), show_clock=clock_var.get(),
-                                       clock_24h=clock24_var.get(), text=text_var.get(), bg_mode=mode_var.get(), delay_s=delay).validated()
+                                       clock_24h=clock24_var.get(), show_date=date_var.get(), date_format=date_fmt_var.get(),
+                                       text=text_var.get(), bg_mode=mode_var.get(), delay_s=delay).validated()
+
+        def show_date_choices() -> None:
+            """The drop-down's entries are today's date in each format; they are rebuilt when the day changes while the window is open."""
+            today = self._today()
+            if state["today"] == today:
+                return
+            day_changed = state["today"] is not None
+            state["today"] = today
+            date_box.configure(values=[text for _fmt, text in idle_mod.date_format_choices(today.year, today.month, today.day)])
+            date_box.current(idle_mod.DATE_FORMATS.index(date_fmt_var.get()))
+            if day_changed:
+                refresh()                                                # the preview shows the date too
+
+        def date_toggled() -> None:
+            date_box.configure(state="readonly" if date_var.get() else "disabled")
+            refresh()
+
+        def date_selected() -> None:
+            index = date_box.current()
+            if index >= 0:
+                date_fmt_var.set(idle_mod.DATE_FORMATS[index])
+                refresh()
 
         def picture_for_preview(mode: str) -> Optional[bytes]:
             if state["remove"] and state["raw"] is None:
@@ -251,8 +301,8 @@ class SettingsWindow:
                     store.set_picture(state["raw"], state["name"], s.bg_mode)
                     state.update(raw=None, remove=False)
                     state["cache"].clear()
-                store.update(theme=s.theme, accent=s.accent, show_clock=s.show_clock, clock_24h=s.clock_24h, text=s.text,
-                             bg_mode=s.bg_mode, delay_s=s.delay_s)
+                store.update(theme=s.theme, accent=s.accent, show_clock=s.show_clock, clock_24h=s.clock_24h, show_date=s.show_date,
+                             date_format=s.date_format, text=s.text, bg_mode=s.bg_mode, delay_s=s.delay_s)
             except ImageError as exc:
                 messagebox.showerror(TITLE, str(exc), parent=root)
                 return
@@ -270,6 +320,10 @@ class SettingsWindow:
             accent_var.set(d.accent)
             clock_var.set(d.show_clock)
             clock24_var.set(d.clock_24h)
+            date_var.set(d.show_date)
+            date_fmt_var.set(d.date_format)
+            date_box.current(idle_mod.DATE_FORMATS.index(d.date_format))
+            date_box.configure(state="readonly" if d.show_date else "disabled")
             text_var.set(d.text)
             delay_var.set(d.delay_s)
             mode_var.set(d.bg_mode)
@@ -281,6 +335,7 @@ class SettingsWindow:
             refresh()
 
         def poll_raise() -> None:
+            show_date_choices()
             if self.pairing is not None:
                 pair_var.set("Display: paired" if self.pairing.paired else "Display: not paired")
             if self._raise.is_set():
@@ -292,12 +347,17 @@ class SettingsWindow:
             root.after(300, poll_raise)
 
         theme_box.bind("<<ComboboxSelected>>", lambda _e: refresh())
+        date_box.bind("<<ComboboxSelected>>", lambda _e: date_selected())
         text_var.trace_add("write", lambda *_: refresh())
         delay_var.trace_add("write", lambda *_: refresh())
         mark_swatches()
+        show_date_choices()
+        date_box.configure(state="readonly" if cur.show_date else "disabled")
         draw_preview()
         root.after(300, poll_raise)
-        root.mainloop()
+        return SimpleNamespace(show_date=date_var, date_format=date_fmt_var, date_box=date_box, canvas=canvas, status=status_var,
+                               collect=collect, apply=apply_now, reset=reset_defaults, redraw=draw_preview, poll=show_date_choices,
+                               toggle_date=date_toggled, select_date=date_selected)
 
 
 # ---- pairing dialog ------------------------------------------------------------------------------------------------------
