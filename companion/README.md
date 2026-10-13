@@ -102,6 +102,7 @@ double-click it -> **Settings...** opens the *Idle Screen* window - no command l
 | Accent colour | seven presets or **Custom...**: the line under the clock, the small connection dot, the Neon glow |
 | Photo background | **Choose Image...** (JPG or PNG) with **Fill** (covers the screen), **Fit** (the whole picture, dark bars) or **Blur Fill** (a blurred copy fills the screen, the sharp picture in front). It is resized and prepared here; the display never receives your original. Without a picture the Photo theme shows Dark |
 | Show clock / 24-hour | a large digital clock (the PC's local time) |
+| Date: Show the date / Format | today's date under the clock, or on its own when the clock is hidden (the PC's local date; it changes at local midnight by itself). Four formats, always with English month names: `Oct 13, 2026`, `13 Oct 2026`, `10/13/2026`, `13/10/2026`; the drop-down shows today's date in each |
 | Custom line | one line of text under the clock (letters, numbers, basic punctuation; accents are simplified, other scripts dropped, because the display fonts cannot draw them) |
 | Show idle screen after | how long nothing must have played before the idle screen appears (2-60 s, default 4 s) |
 

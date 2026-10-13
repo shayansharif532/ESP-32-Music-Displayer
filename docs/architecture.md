@@ -228,7 +228,7 @@ each endpoint; the answers are JSON (UTF-8) unless stated.
 | `POST /control/source-auto`, `GET /sources` | Back to automatic selection; the swipe list `{"mode":"auto"\|"manual","displayed":...,"sources":[{app,name,state,title,artist,displayed}]}`, ending with the synthetic row `{"app":"idle","name":"Idle Screen","synthetic":true,...}` |
 | `POST /control/shuffle`, `/control/repeat` (also `shuffle-on` / `shuffle-off` / `repeat-off` / `repeat-list` / `repeat-track`) | **Spotify only** (identified by the session's app id): toggle shuffle / cycle repeat off -> playlist -> track -> off through Windows' own session controls; the answer carries a fresh `now`. `ok:false` for every other app |
 | `GET /volume`, `POST /volume?level=0..100`, `POST /control/volume-up` / `volume-down` (`?step=5`, `&app=`) | The **per-application** volume of the displayed app (its Windows audio-session volume, never the master volume): `{"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}`; `ok:false` + `"error":"no audio session found for ..."` when the app has none. Details: [M8b](development-history/M8b-art-layout-gestures-volume.md) |
-| `GET /idle` | The idle-screen settings: `{"ok":true,"version":7,"theme":"dark\|minimal\|neon\|photo","accent":"#4DA3FF","clock":true,"clock_24h":true,"text":"...","bg_mode":"fill\|fit\|blur","delay_s":4,"image":null \| {"v":3,"size":123456,"crc":1234567890,"w":480,"h":480}}`. Read-only: nothing on the LAN can change the settings, they are edited in the companion's own Settings window |
+| `GET /idle` | The idle-screen settings: `{"ok":true,"version":7,"theme":"dark\|minimal\|neon\|photo","accent":"#4DA3FF","clock":true,"clock_24h":true,"date":true,"date_fmt":0,"text":"...","bg_mode":"fill\|fit\|blur","delay_s":4,"image":null \| {"v":3,"size":123456,"crc":1234567890,"w":480,"h":480}}`. Read-only: nothing on the LAN can change the settings, they are edited in the companion's own Settings window |
 | `GET /idle/image` | The Photo theme's background, a ready-made **480x480 baseline JPEG <= 200 KB** (`X-Idle-Crc` = its CRC-32); 404 when none is set |
 | `GET /health` | `{"ok":true,"service":"desk-media-companion","version":"..."}` |
 
@@ -239,7 +239,7 @@ artwork; `""` = none), `can_play`, `can_pause`, `can_next`, `can_prev`, `can_see
 `sources` (how many items a vertical swipe walks, including Idle), `source_index` (1-based), `mode` (`manual` while a temporary manual selection is
 active, else `auto`), the Spotify-only fields `spotify`, `shuffle`, `repeat` (0 off, 1 playlist / album, 2 track), `can_shuffle`,
 `can_repeat`, and the idle-screen fields `any_playing` (some usable session plays anywhere), `idle_selected` (the user swiped onto the Idle
-item), `idle_v` (settings version) and `clock_ms` (the PC's local time in ms since the epoch, for the clock). Older companions send none of the idle fields; the
+item), `idle_v` (settings version) and `clock_ms` (the PC's local time in ms since the epoch, for the clock and the date). Older companions send none of the idle fields; the
 display then follows `playing` and shows no clock.
 
 ## Failure behaviour

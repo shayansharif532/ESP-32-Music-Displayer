@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import functools
 import io
 import json
 import logging
@@ -30,9 +31,14 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
+from . import idle_layout as lay
+from .idle_date import (DATE_FORMAT_DEFAULT, DATE_FORMAT_LABELS, DATE_FORMATS, civil_from_clock_ms,  # noqa: F401 (re-exported)
+                        date_format_choices, date_format_index, format_clock_ms, format_date)
+from .idle_layout import SCREEN
+from .resources import resource_path
+
 log = logging.getLogger("idle")
 
-SCREEN = 480                          # the display is 480 x 480
 THEMES = ("minimal", "dark", "neon", "photo")
 BG_MODES = ("fill", "fit", "blur")
 THEME_LABELS = {"minimal": "Minimal", "dark": "Dark", "neon": "Neon", "photo": "Photo"}
@@ -66,6 +72,8 @@ class IdleSettings:
     accent: str = DEFAULT_ACCENT
     show_clock: bool = True
     clock_24h: bool = True
+    show_date: bool = True            # independent of show_clock: a date without a clock is a valid setup
+    date_format: str = DATE_FORMAT_DEFAULT
     text: str = ""
     bg_mode: str = "fill"
     delay_s: int = DELAY_DEFAULT
@@ -80,6 +88,10 @@ class IdleSettings:
         s.accent = s.accent.upper()
         s.show_clock = bool(s.show_clock)
         s.clock_24h = bool(s.clock_24h)
+        if not isinstance(s.show_date, bool):                       # anything but a real boolean is a damaged file: show it
+            s.show_date = True
+        if s.date_format not in DATE_FORMATS:
+            s.date_format = DATE_FORMAT_DEFAULT
         s.text = sanitize_text(s.text)
         if s.bg_mode not in BG_MODES:
             s.bg_mode = "fill"
@@ -214,42 +226,145 @@ def theme_background(s: IdleSettings, size: int = SCREEN) -> Image.Image:
     return _gradient((29, 29, 54), (7, 7, 12), size)                  # dark
 
 
-def render_preview(s: IdleSettings, background_jpeg: Optional[bytes], size: int = 240, now: Optional[dt.datetime] = None) -> Image.Image:
-    """A small picture of the idle screen for the settings window."""
+@functools.lru_cache(maxsize=32)
+def _montserrat(px: float) -> ImageFont.FreeTypeFont:
+    """The firmware's typeface (LVGL's built-in fonts are Montserrat Medium) at `px` pixels. Without the font file - an exe built
+    without its data folder - the preview still works with Pillow's stand-in, only the letter shapes differ."""
+    try:
+        return ImageFont.truetype(resource_path("Montserrat-Medium.ttf"), px)
+    except OSError:
+        log.warning("Montserrat-Medium.ttf not found: the settings preview uses a stand-in font")
+        return ImageFont.load_default(size=px)
+
+
+def _put_text(img: Image.Image, items: list[tuple[tuple[float, float], str]], font: ImageFont.FreeTypeFont, colour: tuple[int, int, int],
+              opacity: int = 255, anchor: str = "ls") -> Optional[tuple[int, int, int, int]]:
+    """Draws the strings in `items` ((x, y), text) over `img` in `colour`, blended with `opacity` (0-255) the way LVGL blends a label
+    with text_opa; returns the box (left, top, right, bottom) of the pixels that got ink, or None when nothing was drawn."""
+    mask = Image.new("L", img.size, 0)
+    d = ImageDraw.Draw(mask)
+    for xy, text in items:
+        d.text(xy, text, font=font, fill=opacity, anchor=anchor)
+    img.paste(colour, (0, 0), mask)
+    return mask.getbbox()
+
+
+def _shorten(text: str, font: ImageFont.FreeTypeFont, max_width: float) -> str:
+    """The text, cut with "..." when it is wider than `max_width` (a label on the display never wraps)."""
+    if font.getlength(text) <= max_width:
+        return text
+    while text and font.getlength(text + "...") > max_width:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
+def clock_text(now: dt.datetime, clock_24h: bool) -> tuple[str, str]:
+    """(digits, "AM" / "PM" or "") exactly as the display writes the clock: `14:05`, or `2:05` + `PM` (no leading zero)."""
+    if clock_24h:
+        return f"{now.hour:02d}:{now.minute:02d}", ""
+    return f"{now.hour % 12 or 12}:{now.minute:02d}", "AM" if now.hour < 12 else "PM"
+
+
+def render_preview(s: IdleSettings, background_jpeg: Optional[bytes], size: int = 240, now: Optional[dt.datetime] = None,
+                   boxes: Optional[dict[str, tuple[int, int, int, int]]] = None) -> Image.Image:
+    """A picture of the idle screen for the settings window: the display's own geometry (idle_layout.py), fonts, strings and per-theme
+    contrast, scaled by size / 480. `now` is the PC's local time (its own year / month / day / hour / minute are shown, whatever
+    its tzinfo). When `boxes` is a dict it is filled with the ink box (left, top, right, bottom, in pixels of the returned image) of
+    every element drawn - clock, ampm, date, text, line, status, connected, dot - so a test can render at size 480 and check where
+    each one landed."""
     s = s.validated()
     k = size / SCREEN
+    bg: Optional[Image.Image] = None
+    photo = False
     if s.theme == "photo" and background_jpeg:
         try:
             bg = Image.open(io.BytesIO(background_jpeg)).convert("RGB").resize((size, size), Image.LANCZOS)
-            bg = Image.blend(bg, Image.new("RGB", (size, size), (0, 0, 0)), 0.30)      # the display dims a photo a little for legibility
+            bg = Image.blend(bg, Image.new("RGB", (size, size), (0, 0, 0)), lay.PHOTO_DIM)    # the display dims a photo for legibility
+            photo = True
         except (OSError, ValueError):
-            bg = theme_background(dataclasses.replace(s, theme="dark"), size)
-    else:
-        bg = theme_background(s if s.theme != "photo" else dataclasses.replace(s, theme="dark"), size)
-    d = ImageDraw.Draw(bg)
+            bg = None
+    theme = "photo" if photo else ("dark" if s.theme == "photo" else s.theme)       # a Photo theme without a usable picture is Dark
+    if bg is None:
+        bg = theme_background(dataclasses.replace(s, theme=theme), size)
     accent = _rgb(s.accent)
     now = now or dt.datetime.now()
-    clock = now.strftime("%H:%M") if s.clock_24h else now.strftime("%I:%M").lstrip("0")
-    big = ImageFont.load_default(size=max(12, int(112 * k)))
-    mid = ImageFont.load_default(size=max(8, int(30 * k)))
-    small = ImageFont.load_default(size=max(7, int(14 * k)))
-    if s.show_clock:
-        y = int((120 if s.text else 150) * k)
-        if s.theme == "neon":                                                      # a cheap glow
-            for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
-                d.text((size // 2 + dx * k, y + dy * k), clock, font=big, fill=tuple(c // 3 for c in accent), anchor="mt")
-        d.text((size // 2, y), clock, font=big, fill=(255, 255, 255), anchor="mt")
-        line_y = int((300 if s.text else 330) * k)
-    else:
-        line_y = int(250 * k)
-    if s.theme != "minimal":
-        w = int(64 * k)
-        d.rectangle((size // 2 - w // 2, line_y, size // 2 + w // 2, line_y + max(1, int(3 * k))), fill=accent)
-    if s.text:
-        d.text((size // 2, line_y + int(14 * k)), s.text, font=mid, fill=(235, 235, 240), anchor="mt")
-    d.text((size // 2, size - int(26 * k)), "Nothing playing", font=small, fill=(150, 152, 170), anchor="mt")
-    d.ellipse((size // 2 - int(3 * k) - int(48 * k), int(16 * k), size // 2 + int(3 * k) - int(48 * k), int(22 * k)), fill=accent)
-    d.text((size // 2 - int(38 * k), int(13 * k)), "Connected", font=small, fill=(130, 132, 150), anchor="lt")
+    layout = lay.idle_layout(s.show_clock, bool(s.text), s.show_date)
+    ring = ((0, 0, 0), lay.PHOTO_RING_OPACITY) if theme == "photo" else (accent, lay.NEON_RING_OPACITY) if theme == "neon" else None
+    centre = lay.CENTER_X * k
+    found: dict[str, tuple[int, int, int, int]] = {}
+
+    def font(device_px: int) -> ImageFont.FreeTypeFont:
+        return _montserrat(device_px * k)
+
+    def baseline(centre_y: int, device_px: int) -> float:
+        return lay.label_baseline(lay.label_top(centre_y, device_px), device_px) * k
+
+    def record(name: str, box: Optional[tuple[int, int, int, int]]) -> None:
+        if box is not None:
+            found[name] = box
+
+    if layout.clock_cy is not None:
+        digits, suffix = clock_text(now, s.clock_24h)
+        f = font(lay.CLOCK_PX)
+        digit_width = max(f.getlength(c) for c in "0123456789")                    # tabular digits, as in the generated clock font
+        advances = [digit_width if c.isdigit() else f.getlength(c) for c in digits]
+        left = centre - sum(advances) / 2
+
+        def glyphs(dx: float, dy: float) -> list[tuple[tuple[float, float], str]]:
+            items, x = [], left
+            for c, advance in zip(digits, advances):
+                items.append(((x + (advance - f.getlength(c)) / 2 + dx, layout.clock_baseline * k + dy), c))
+                x += advance
+            return items
+
+        if ring:
+            for dx, dy in lay.CLOCK_RING:
+                _put_text(bg, glyphs(dx * k, dy * k), f, ring[0], ring[1])
+        record("clock", _put_text(bg, glyphs(0, 0), f, lay.CLOCK_COLOUR))
+        if suffix:
+            at = ((left + sum(advances) + lay.AMPM_GAP * k, layout.ampm_baseline * k), suffix)
+            record("ampm", _put_text(bg, [at], font(lay.AMPM_PX), lay.AMPM_COLOUR))
+
+    if layout.date_cy is not None:
+        text = format_date(now.year, now.month, now.day, s.date_format)
+        f, y = font(layout.date_px), baseline(layout.date_cy, layout.date_px)
+        if ring:
+            for dx, dy in lay.DATE_RING:
+                _put_text(bg, [((centre + dx * k, y + dy * k), text)], f, ring[0], ring[1], anchor="ms")
+        record("date", _put_text(bg, [((centre, y), text)], f, lay.DATE_COLOUR, anchor="ms"))
+
+    if theme != "minimal":
+        w, h = max(2, round(lay.ACCENT_LINE[0] * k)), max(1, round(lay.ACCENT_LINE[1] * k))
+        x, y = round((lay.CENTER_X - lay.ACCENT_LINE[0] / 2) * k), round(layout.line_y * k)
+        shape = _rounded_mask((w, h), h / 2)
+        if theme == "neon":                                                           # the line glows (LVGL shadow, 60 %)
+            glow_width, glow_opacity = lay.NEON_LINE_GLOW
+            pad = int(glow_width * k * 1.5) + 2
+            glow = Image.new("L", (w + 2 * pad, h + 2 * pad), 0)
+            glow.paste(shape, (pad, pad))
+            glow = glow.filter(ImageFilter.GaussianBlur(glow_width * k / 2)).point(lambda v: v * glow_opacity // 255)
+            bg.paste(accent, (x - pad, y - pad), glow)
+        bg.paste(accent, (x, y), shape)
+        found["line"] = (x, y, x + w, y + h)
+
+    if layout.text_cy is not None:
+        f, y = font(layout.text_px), baseline(layout.text_cy, layout.text_px)
+        shown = _shorten(s.text, f, lay.LABEL_WIDTH * k)
+        if theme == "photo":
+            dx, dy, opacity = lay.PHOTO_TEXT_SHADOW
+            _put_text(bg, [((centre + dx * k, y + dy * k), shown)], f, (0, 0, 0), opacity, anchor="ms")
+        record("text", _put_text(bg, [((centre, y), shown)], f, lay.TEXT_COLOUR, anchor="ms"))
+
+    status_y = lay.label_baseline(lay.STATUS_TOP, lay.STATUS_PX) * k
+    record("status", _put_text(bg, [((centre, status_y), "Nothing playing")], font(lay.STATUS_PX), lay.STATUS_COLOUR, anchor="ms"))
+    dot_x, dot_y, dot_size = round(lay.CONNECTED_DOT[0] * k), round(lay.CONNECTED_DOT[1] * k), max(2, round(lay.CONNECTED_DOT[2] * k))
+    bg.paste(accent, (dot_x, dot_y), _rounded_mask((dot_size, dot_size), dot_size / 2))
+    found["dot"] = (dot_x, dot_y, dot_x + dot_size, dot_y + dot_size)
+    label_x, label_top_y = lay.CONNECTED_POS
+    connected_y = lay.label_baseline(label_top_y, lay.CONNECTED_PX) * k
+    record("connected", _put_text(bg, [((label_x * k, connected_y), "Connected")], font(lay.CONNECTED_PX), lay.STATUS_COLOUR))
+    if boxes is not None:
+        boxes.update(found)
     return bg
 
 
@@ -362,7 +477,8 @@ class IdleStore:
             s = self._settings
             return {
                 "ok": True, "version": self._version, "theme": s.theme, "accent": s.accent, "clock": s.show_clock,
-                "clock_24h": s.clock_24h, "text": s.text, "bg_mode": s.bg_mode, "delay_s": s.delay_s,
+                "clock_24h": s.clock_24h, "date": s.show_date, "date_fmt": date_format_index(s.date_format),
+                "text": s.text, "bg_mode": s.bg_mode, "delay_s": s.delay_s,
                 "image": ({"v": self._image_v, "size": len(self._image), "crc": self._image_crc, "w": SCREEN, "h": SCREEN}
                           if self._image else None),
             }
@@ -448,9 +564,23 @@ class IdleStore:
                 return self._image
 
 
-def local_clock_ms() -> int:
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+
+def local_clock_ms(now: Optional[dt.datetime] = None) -> int:
     """The PC's local wall-clock time in milliseconds since the Unix epoch (UTC + the local offset): the display shows
-    (ms / 1000) % 86400 as its time of day, so daylight-saving changes need nothing on its side."""
-    now = dt.datetime.now().astimezone()
-    offset = now.utcoffset() or dt.timedelta(0)
-    return int((now.timestamp() + offset.total_seconds()) * 1000)
+    (ms / 1000) % 86400 as its time of day and floor(ms / 86400000) days after 1970-01-01 as its date, so daylight-saving changes
+    and odd offsets (+5:30, +5:45, -9:30) need nothing on its side - only the offset inside this number matters.
+
+    `now` is for tests: an aware datetime is used with the offset it carries (any tzinfo, no conversion to the PC's zone); a naive
+    one is read as the PC's local time; None = the current time. The arithmetic is on integers (no float timestamps), so a
+    millisecond at midnight is exact."""
+    if now is None:
+        now = dt.datetime.now()
+    offset = now.utcoffset()
+    if offset is None:                                  # naive: the PC's own zone (also resolves a repeated hour like the OS does)
+        now = now.astimezone()
+        offset = now.utcoffset() or dt.timedelta(0)
+    since_epoch = now - _EPOCH                          # aware - aware: the real elapsed time, in UTC
+    utc_ms = (since_epoch.days * 86400 + since_epoch.seconds) * 1000 + since_epoch.microseconds // 1000
+    return utc_ms + offset // dt.timedelta(milliseconds=1)
