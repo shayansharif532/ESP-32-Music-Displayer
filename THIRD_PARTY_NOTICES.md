@@ -76,6 +76,7 @@ The exe is built with PyInstaller and contains the Python 3.12 runtime, Tcl/Tk a
 | winrt-runtime and the `winrt-Windows.*` projections 3.2 | MIT | Copyright (c) Microsoft Corporation; Copyright (c) 2021-2025 David Lechner |
 | six 1.17 (dependency of pystray) | MIT | Copyright (c) 2010-2024 Benjamin Peterson |
 | typing_extensions | PSF-2.0 | Python Software Foundation |
+| Montserrat Medium (`companion/desk_media_companion/assets/Montserrat-Medium.ttf`; a data file inside the exe, used to draw the settings window's preview in the display's own typeface) | SIL Open Font License 1.1 | Copyright 2011 The Montserrat Project Authors (https://github.com/JulietaUla/Montserrat). The file is the unmodified `scripts/built_in_font/Montserrat-Medium.ttf` of LVGL 9.5.0 (the font LVGL's built-in `lv_font_montserrat_*` are made from). The licence text is `LICENSES/OFL-1.1-Montserrat.txt` and is also kept next to the font (`assets/OFL-1.1-Montserrat.txt`) so it travels with every copy. No Reserved Font Name is declared by the upstream licence file. |
 
 Credit lines required by bundled libraries: "Portions of this software are copyright (c) The FreeType Project
 (www.freetype.org). All rights reserved." and "This software is based in part on the work of the Independent JPEG Group."
