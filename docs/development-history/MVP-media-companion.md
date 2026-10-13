@@ -1,7 +1,7 @@
 # MVP: Windows media companion + ESP32 display (Milestones 3-7)
 
-Date: 2026-10-12. Branch: `feature/mvp`. Architecture: [../ARCHITECTURE.md](../ARCHITECTURE.md) (ADR-003).
-The owner replaced the Spotify Web API plan with a Windows media-session companion the same day; the Spotify code is parked in `legacy/`.
+Date: 2026-10-12. Branch: `feature/mvp`. Architecture: [../architecture.md](../architecture.md) (ADR-003).
+The maintainer replaced the Spotify Web API plan with a Windows media-session companion the same day; the Spotify code was removed from the tree later (it lives in git history under the tag `legacy-spotify-web-api`).
 
 ## What was built
 
@@ -26,9 +26,9 @@ The owner replaced the Spotify Web API plan with a Windows media-session compani
 | Board keeps working unattended | after several minutes with no serial reader the board was still polling the companion once per second (seen in the companion's debug log) and re-attached to a restarted companion by itself |
 | Packaged exe | `DeskMediaCompanion.exe` (windowed, no console) answered `/health`, `/now-playing`, `/artwork` correctly on a spare port |
 
-## Owner test with real media (2026-10-12, 15-minute serial log `mvp-soak-final.log`, read by Claude afterwards)
+## Maintainer test with real media (2026-10-12, 15-minute serial log `mvp-soak-final.log`, read by Claude afterwards)
 
-The owner tapped the board and played real media while a serial reader was attached. From the log (not from looking at the screen):
+The maintainer tapped the board and played real media while a serial reader was attached. From the log (not from looking at the screen):
 
 | Check | Result |
 |---|---|
@@ -42,23 +42,23 @@ Observed and handled afterwards: when everything is paused the display once jump
 
 ## Not yet confirmed
 
-1. **Visual check by the owner**: layout, colours, letterboxed 16:9 art, scrolling long titles - the logs prove the data path, not how it looks. No problem has been reported.
+1. **Visual check by the maintainer**: layout, colours, letterboxed 16:9 art, scrolling long titles - the logs prove the data path, not how it looks. No problem has been reported.
 2. **Seek by dragging the bar** and the **art tap / full-screen toggle** are not distinguishable in the log (no command is logged for the toggle; no `seek` command appears in this log).
-3. **Windows Firewall on the recipient's PC** (fine on the dev PC).
+3. **Windows Firewall on the user's PC** (fine on the dev PC).
 
-## (earlier list, kept for history) NOT yet verified before the owner test
+## (earlier list, kept for history) NOT yet verified before the maintainer test
 
 1. **Touch on the network build**: taps on prev / play-pause / next / seek / art-toggle. The command path (UI -> `pc_media_command` -> companion -> session) is proven
    by curl and by the firmware code, but no physical tap has been logged yet (`touches=0` in every health line so far). A multi-minute touch soak is also still owed (M2 acceptance).
 2. **Spotify desktop** (not running on the dev PC) and **YouTube in Chrome/Edge** (verified only through an embedded Chromium). Same Windows API; expected to work, to be confirmed.
-3. **Visual check** of the layout with real artwork (colours, letterboxing, scrolling long titles) - only the owner can see the screen.
-4. **Windows Firewall on the recipient's PC**: on the dev PC the board connected without a manual rule. A fresh PC will show the Windows prompt once; documented in `companion/README.md`.
+3. **Visual check** of the layout with real artwork (colours, letterboxing, scrolling long titles) - only the maintainer can see the screen.
+4. **Windows Firewall on the user's PC**: on the dev PC the board connected without a manual rule. A fresh PC will show the Windows prompt once; documented in `companion/README.md`.
 
 ## Known issues / limits
 
 * **Dev-only:** after a long period with *no* serial reader attached (or a reader that stalls), the board's USB-Serial/JTAG console output can stop until the next reset. The firmware itself keeps running (verified by the companion log). Keep `serial_capture.py` attached - and use `--reset` - when you need logs; this does not affect normal use.
 * Fonts: Montserrat has no CJK / Cyrillic / emoji glyphs - such titles render with missing characters (many YouTube titles). Needs a fallback font (polish milestone).
 * `can_next` / `can_prev` are reported but the UI does not dim the buttons yet.
-* Single companion, no pairing: any device on the LAN could press the buttons (fenced as described in ARCHITECTURE.md). Pairing token planned for Milestone 11.
+* Single companion, no pairing: any device on the LAN could press the buttons (fenced as described in architecture.md). Pairing token planned for Milestone 11.
 * When one app is paused and another is playing, the display shows the playing one (by design).
 * Wi-Fi password is compiled into the dev firmware from the git-ignored `secrets.local.h`; the product moves it to NVS (Milestone 11).

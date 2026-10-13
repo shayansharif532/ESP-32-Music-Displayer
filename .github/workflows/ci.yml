@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  companion-tests:
+    name: Companion unit tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: companion/requirements.txt
+      - run: python -m pip install -r companion/requirements.txt
+      - run: python -m unittest discover -s companion/tests -v
+
+  firmware-build:
+    name: Firmware build (ESP-IDF 5.5.5, esp32s3)
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        # No Wi-Fi credentials in CI: the firmware then builds the UI-only demo player; the network code is compiled with a
+        # placeholder secrets file so that the real code path is built too (nothing from it is published).
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd firmware
+          printf '#pragma once\n#define DEV_WIFI_SSID "ci-placeholder"\n#define DEV_WIFI_PASSWORD "ci-placeholder"\n#define DEV_COMPANION_HOST ""\n' > secrets.local.h
+          idf.py set-target esp32s3
+          idf.py build
+
+  secret-scan:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

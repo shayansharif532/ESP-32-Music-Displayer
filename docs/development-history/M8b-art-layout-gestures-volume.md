@@ -1,13 +1,13 @@
 # Milestone 8b — widescreen art layout, no app logos, swipe gestures, per-app volume, side buttons
 
-Date: 2026-10-12. Branch: `feature/art-layout-gestures-volume`. Request (owner, after physically reviewing M8): fix how 16:9 YouTube thumbnails look,
+Date: 2026-10-12. Branch: `feature/art-layout-gestures-volume`. Request (maintainer, after physically reviewing M8): fix how 16:9 YouTube thumbnails look,
 get the Spotify logo off the screen, add swipe gestures, per-application volume through Windows, and use the two side buttons for volume.
 
 ![Square and widescreen artwork on the real display](img/m8b-art-layouts.jpg)
 
 *Real screenshots from the board (`tools/screenshot.py`), left to right / top to bottom: square cover (unchanged layout), 16:9 HD frame as a landscape card, 4:3 frame with baked-in black bars (bars trimmed),
 5:1 banner (clamped to 2.4:1), a Spotify-style composite (only the cover block is shown, no logo), the swipe-feedback disc, the "Volume 65%" pill, and full-screen mode of a landscape cover.
-All covers here are synthetic (`companion/tools/make_test_covers.py`); no third-party artwork is committed. The checks with the owner's real Spotify and Chrome / YouTube Music sessions were done on the real
+All covers here are synthetic (`companion/tools/make_test_covers.py`); no third-party artwork is committed. The checks with the maintainer's real Spotify and Chrome / YouTube Music sessions were done on the real
 display too (screenshots kept locally in the git-ignored `logs/`): Spotify showed only the cover with a tiny "Spotify" label; the Chrome / YouTube Music session showed its real 16:9 thumbnail as a landscape card.*
 
 ## 1. Widescreen artwork: a landscape card instead of a letterboxed square
@@ -59,7 +59,7 @@ The source app stays as a tiny 12 px label at the top of the screen ("Spotify", 
 ## 3. Swipe gestures
 
 Horizontal swipe on the Now Playing screen: **swipe right = next track, swipe left = previous track** (as requested, regardless of convention).
-*(Superseded by Milestone 8c, at the owner's request: left = next, right = previous, plus vertical swipes that switch the media source - see `M8c-session-switching.md`.)*
+*(Superseded by Milestone 8c, at the maintainer's request: left = next, right = previous, plus vertical swipes that switch the media source - see `M8c-session-switching.md`.)*
 
 * Rules (`ui.c`, constants `SWIPE_*`): >= 72 px horizontal travel, vertical drift never above 44 px and at most half the horizontal travel, within 1 s. A tap moves < 10 px.
 * On success the touch is consumed (`lv_indev_wait_release`), so the finger's start object does not also get a click; a press that travelled more than 24 px is never treated as a tap
@@ -79,7 +79,7 @@ Horizontal swipe on the Now Playing screen: **swipe right = next track, swipe le
   The display passes `app=` (the app it is showing); the companion honours it only if that app really has a media session now, otherwise it falls back to the displayed session. Nothing outside
   media apps can be addressed. Pressing "up" on a muted app un-mutes it.
 * **Verified** (`companion/tools/check_master_volume.py`): the Windows master volume of all four playback devices was identical before / during / after, and only the displayed app's session changed.
-  Real mapping on the owner's PC: `Spotify.exe` -> 1 session (the main process), `chrome.exe` -> 1 session (Chrome's audio process). Call latency ~6 ms (first call ~120 ms).
+  Real mapping on the maintainer's PC: `Spotify.exe` -> 1 session (the main process), `chrome.exe` -> 1 session (Chrome's audio process). Call latency ~6 ms (first call ~120 ms).
 * **Limitations (honest)**
   * **Chrome / Edge / any Chromium browser**: all tabs share one audio process, hence one session. The volume of "the YouTube tab" cannot be addressed separately; **the whole browser's volume changes**.
   * **Firefox** uses an opaque app id (a hash), so it cannot be matched: the display shows "No volume control".
@@ -126,9 +126,9 @@ Identified from the schematic (page 1 "KEYS" block, vector text extracted from t
 | Landscape card | real-display screenshots: 150x84 video thumbnail, 1280x720 HD frame, letterboxed 4:3 (bars trimmed), 5:1 banner (clamped 2.4:1), real Chrome / YouTube Music 16:9 | pass |
 | Spotify logo | real Spotify session: log "kept the 233x233 cover block, dropped 1 logo band(s)", real-display screenshot shows the cover only | pass |
 | Swipes | virtual finger through the real LVGL input path (`tools/screenshot.py --do swipe_*`): right -> `control next ok`, left -> `control previous ok`, from the text area -> next, **vertical and 45-degree swipes -> no command (twice)**, **swipe from the progress bar -> `control seek` only, track unchanged**, tap on the cover -> full-screen toggle, tap on play -> `control playpause` | pass |
-| Owner's real finger | the owner swiped and pressed on the real touchscreen during testing; the companion log shows matching alternating `next` / `previous` | observed |
+| Maintainer's real finger | the maintainer swiped and pressed on the real touchscreen during testing; the companion log shows matching alternating `next` / `previous` | observed |
 | Volume API | fake session with a silent audio stream: 100 -> 95 -> 90 -> set 100; master volume unchanged on all 4 devices; no unrelated session changed | pass |
-| Volume keys | BOOT (lower) physically pressed and held by the owner: companion log shows `volume-down` steps on the displayed app (this also exposed the two bugs in section 6). PWR (upper): see the final report | BOOT observed |
+| Volume keys | BOOT (lower) physically pressed and held by the maintainer: companion log shows `volume-down` steps on the displayed app (this also exposed the two bugs in section 6). PWR (upper): see the final report | BOOT observed |
 | Hold-repeat | simulated 3 s hold: 11 steps, ~4/s, stops at 3 s, no backlog, poll unaffected | pass |
 | Overlays | real-display screenshots of "Volume 100%", "No volume control", "PC not reachable", "Muted" and the swipe disc | pass |
 | Soak | scripted swipes / taps / key presses / track changes (square <-> landscape) for 5 minutes with the board's serial log | see section 8 |
@@ -146,7 +146,7 @@ board log captured over the last 95 actions / 300 s (`logs/soak.log`, not commit
   because the soak's own full-screen toggles hide the buttons; a direct check of 6 play taps from the normal layout produced 6 commands), per-app volume steps 95 (18 single presses + 7 simulated 3-second holds).
   No vertical or diagonal swipe produced a command.
 
-Not covered by this soak (needs fingers): the real GT911 touch path under swipes (the owner's own swipes were seen in the log: alternating `next` / `previous`), and the PWR key.
+Not covered by this soak (needs fingers): the real GT911 touch path under swipes (the maintainer's own swipes were seen in the log: alternating `next` / `previous`), and the PWR key.
 
 ## Known issues / not yet done
 

@@ -1,222 +1,242 @@
-# ESP32 Desk Media Display — "Night City" edition
+# DeskMedia Display
+A standalone ESP32-S3 touchscreen media display and controller for Windows.
 
-A birthday-gift desk display for the recipient's **Windows PC**: it shows and controls whatever the PC is playing — Spotify desktop,
-YouTube / YouTube Music in a browser, VLC, Apple Music, … (it makes no sound itself) — big square artwork, title, artist / channel,
-progress/seek, play-pause-previous-next, and a customisable idle screen (clock, themes, your own background picture) for when nothing is playing.
+A small Windows companion reads the Windows Global System Media Transport Controls (GSMTC) and per-application audio sessions. The ESP32-S3
+display finds it on the local network, follows whatever is playing, shows the artwork, title and progress on a 480x480 touchscreen, and sends
+your taps and swipes back as media commands. It works with Spotify, with Chrome / Edge / YouTube and with any other app that publishes a
+Windows media session. No Spotify account, OAuth or Premium subscription is needed.
 
-How: a small **Windows companion** ([`companion/`](companion/)) reads the PC's active *media session* and serves it over the home LAN; the
-ESP32 finds it automatically and polls it. **No Spotify account, Client ID, Premium, OAuth or tokens** — see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and ADR-003 in [docs/DECISIONS.md](docs/DECISIONS.md). (The earlier Spotify-Web-API plan is
-obsolete; its code is parked in [`legacy/`](legacy/README.md).)
+Platform: Windows 10 / 11 · Firmware: ESP-IDF 5.5.5, LVGL 9.5, C · Companion: Python 3.12 · Board: Waveshare ESP32-S3-Touch-LCD-4B
+
+## Screenshots
+
+Captured from the board's real LVGL frame buffer with the developer screenshot tool (`tools/screenshot.py`). All covers are synthetic test
+images; nothing here comes from a real music library or desktop.
 
 | | |
 |---|---|
-| **Board** | **Waveshare ESP32-S3-Touch-LCD-4B, SKU 32052** ("Smart 86 Box"): ESP32-S3-WROOM-1-N16R8 (16 MB quad flash, 8 MB octal PSRAM), 4" 480x480 ST7701 RGB panel, GT911 capacitive touch, native USB, BOOT + PWR buttons (no RESET button) |
-| **Framework** | **ESP-IDF 5.5.5** (C / FreeRTOS) — not Arduino, see [docs/DECISIONS.md](docs/DECISIONS.md) |
-| **UI** | **LVGL 9.5.0** via `espressif/esp_lvgl_port` 2.9.0 |
-| **Board support** | Waveshare BSP **`waveshare/esp32_s3_touch_lcd_4b` 2.0.0** (with `esp_lcd_st7701` 2.0.3, `esp_lcd_touch_gt911` 1.2.1) — every version is pinned in [`firmware/dependencies.lock`](firmware/dependencies.lock) |
-| **Windows companion** | Python 3.12 + `winrt-*` (Windows.Media.Control) + Pillow + psutil + pycaw/comtypes (per-app volume) — [`companion/`](companion/) (single `.exe` for the recipient: Milestone 12) |
-| **Dev host** | Windows 10/11, PowerShell 5.1 (the tested path). Linux/macOS: see the note below (untested, firmware only) |
-| **Repository** | <https://github.com/shayansharif532/ESP-32-Spotify> (public since 2026-10-12) |
+| ![Square covers with the artwork-derived background](docs/screenshots/player-covers.jpg) | ![Square, widescreen and letterboxed art, and the volume pill](docs/screenshots/player-art-layouts.jpg) |
+| *Player: six synthetic covers; the whole background is derived from the cover* | *Artwork keeps its own shape: square, 16:9 landscape card, letterboxed 4:3 (bars trimmed), banner; the "Volume 65%" pill* |
+| ![Switching between media sources](docs/screenshots/source-switching.jpg) | ![Spotify shuffle and repeat buttons](docs/screenshots/spotify-controls.jpg) |
+| *Vertical swipe switches the media source (the pill names the source); a paused source shows its own state* | *Shuffle and repeat appear only for Spotify, through the Windows-native controls (a test session stands in for Spotify here)* |
+| ![The idle screen themes](docs/screenshots/idle-themes.jpg) | ![The idle screen as a source](docs/screenshots/idle-source-carousel.jpg) |
+| *Idle screen: Minimal, Dark, Neon, a 12-hour clock, and the Photo theme in Fill / Fit / Blur Fill* | *The idle screen is one more item of the vertical source carousel; music keeps playing behind it* |
+| ![The companion's idle screen settings window](docs/screenshots/idle-settings-window.png) | |
+| *The companion's tray Settings window, with a live preview* | |
 
-> **Status (2026-10-12):** the architecture was changed to the Windows companion (ADR-003) and the **MVP works**: Spotify desktop and YouTube/other
-> media in Chrome show real artwork, title, artist/channel and progress on the display, and play/pause/next/previous work from the touchscreen
-> (24 real touches, no reset). Evidence and the few open points: [docs/milestones/MVP-media-companion.md](docs/milestones/MVP-media-companion.md).
+## Features
 
-## Using the display
+* **480x480 capacitive touch UI** on a 4-inch RGB panel, drawn with LVGL.
+* **Artwork** from the media session, shown large; **16:9 video thumbnails as a landscape card**, never stretched; app logos and black
+  letterbox bars are removed on the PC.
+* **Adaptive, artwork-driven blurred background**: one pre-baked, dithered image per track.
+* **Title and artist / channel, progress with seeking**, play / pause, previous / next.
+* **Gestures:** horizontal swipe = previous / next track, vertical swipe = switch the media source.
+* **Automatic active-player detection (auto-follow):** the display follows the session that started playing most recently, also across
+  **multiple simultaneous sessions** (for example Spotify and a browser tab). A manual source choice is temporary and never disables auto-follow.
+* **Spotify shuffle / repeat** through the Windows-native session controls (Spotify desktop only; no OAuth).
+* **Per-application volume**, never the master volume; the two hardware side buttons are the volume keys.
+* **Customizable idle screen** when nothing plays: Minimal / Dark / Neon / Photo themes, accent colour, clock (12 / 24 h), one custom line,
+  a picture background with Fill / Fit / Blur Fill. Configured in the companion's tray Settings window; no reflashing.
+* **The idle screen is a selectable item of the source carousel** (`Spotify <-> Chrome <-> Idle Screen`): a display choice only, media keeps playing.
+* **Persistent idle image and settings** (NVS plus a dedicated flash partition): they survive reboots of the display, the companion and Windows.
+* **Automatic PC discovery** over the LAN (UDP beacon); the PC's address may change.
+* **Wi-Fi reconnect and recovery**: exponential back-off; the display keeps retrying and says "Can't reach your PC" while the PC is away.
+* **Secure pairing and authenticated requests**: a six-digit code confirmed on both ends, then signed requests ([docs/protocol.md](docs/protocol.md)).
 
-| Control | What it does |
+## Architecture
+
+```
+Spotify / Chrome / Edge / media app
+              ↓
+Windows GSMTC + Core Audio
+              ↓
+DeskMedia Companion
+              ↓
+       Local network
+              ↓
+ESP32-S3 Touch Display
+```
+
+```mermaid
+flowchart TD
+    A["Spotify / Chrome / Edge / any media app"] --> B["Windows GSMTC + Core Audio<br/>session metadata, transport controls, per-app volume"]
+    B --> C["DeskMedia Companion (Python)<br/>HTTP :8765 and UDP beacon :8766"]
+    C <-->|"Local network"| D["ESP32-S3 touch display<br/>ESP-IDF, LVGL, C"]
+```
+
+* **GSMTC** (`Windows.Media.Control`) provides the session metadata (title, artist, artwork, timeline) and the transport controls
+  (play, pause, next, previous, seek). It is the same source as the Windows media overlay and the keyboard media keys.
+* **Core Audio** provides the per-application volume (the same sliders as the Volume Mixer).
+* The **companion** exposes a small local protocol: an HTTP API plus a UDP discovery beacon. It also prepares artwork, so the ESP32 only decodes ready-made images.
+* The **ESP32** handles the touchscreen UI and the embedded interaction: discovery, polling about once a second, rendering, gestures, side keys,
+  and sending commands back. Every command names the session on screen, so it never reaches another app.
+
+Details, diagrams of the device states and of the source-selection model: [docs/architecture.md](docs/architecture.md).
+
+## Technical highlights
+
+* **Embedded graphics.** LVGL 9.5 on an RGB ST7701 panel with PSRAM frame and image buffers, a 24 KB LVGL task pinned to its own core, one
+  software draw unit (chosen after a documented touch-crash investigation), fixed PSRAM buffers allocated once, ordered-dithered RGB565 images so gradients do not band.
+* **ESP32 networking and resilience.** UDP beacon discovery, a time-scheduled 1 Hz poll over a kept-alive HTTP connection that commands can never
+  starve, back-off reconnect, re-discovery when the PC's address changes, size-capped responses and bounded string copies for everything read from the network.
+* **Windows integration.** GSMTC session reading and control through WinRT, and per-application volume through Core Audio sessions
+  (`ISimpleAudioVolume`), verified not to touch the master volume.
+* **Multi-session routing and auto-follow.** A pure, unit-tested state machine (AUTO / MANUAL_TEMP, a synthetic Idle item in the swipe ring)
+  decides what the display shows; a 0.4 s watcher keeps it current; commands carry the displayed session's id and are refused if it is gone.
+* **Persistent configuration.** Settings in NVS and a 1 MB dedicated `idle_img` flash partition with a header-last write, CRC re-check on load
+  and fallbacks, so a power cut during a write cannot produce a broken screen.
+* **Image pipeline.** On the PC: structural removal of app logos (Spotify's alpha composite is split by its alpha bands, never by a fixed crop),
+  letterbox trimming, aspect-preserving rendering, edge-only halo-limited up-scaling for ~150 px browser thumbnails, baseline JPEG encoding. On the
+  ESP32: JPEG decode into fixed PSRAM buffers, dithered RGB565 conversion and a per-track blurred background baked in ~100-400 ms.
+* **Authenticated pairing protocol.** X25519 key agreement with a commitment and a six-digit comparison code, HKDF key derivation, HMAC-SHA256
+  signed requests with single-use nonces (replay protection) and signed responses ([docs/protocol.md](docs/protocol.md)).
+* **Verification.** Unit tests for the pure logic, isolated end-to-end tests against the real Windows media API with silent fake sessions,
+  board-in-the-loop tests with a virtual finger and simulated key presses, and heap / stack soak runs that checked for resets and leaks.
+
+## Hardware
+
+| | |
 |---|---|
-| tap play / previous / next | transport controls of the session being shown |
-| **swipe left / swipe right** on the screen | **next / previous track** (needs >= 72 px of mostly horizontal travel; does nothing if the app has no next / previous) |
-| **swipe up / swipe down** on the screen | **next / previous media source**: temporarily switches the display (artwork, title, progress, play / pause, seek, volume) to another app's media session on the PC - Spotify, a YouTube tab in Chrome, ... - playing or paused; wraps around; the source's name shows for a second; the customisable **idle screen is one more item of the ring** (`Spotify <-> Chrome <-> Idle Screen`, last): selecting it is only a display choice - media keeps playing, no control or volume key reaches any app while it is shown, horizontal swipes do nothing there, and it ends by itself when any session starts playing (or by a tap on it); with no session at all there is nothing to switch to. **Auto-follow always comes back**: as soon as another app starts playing (or the one you picked closes, or - if it is paused while something else plays - after 20 s without touching it) the display goes back to following what is playing |
-| **shuffle / repeat** (small buttons left of previous / right of next) | **Spotify only**: toggle shuffle; repeat cycles off -> playlist -> track (a "1" on the icon). Green when on. They do not exist for Chrome / Edge / VLC / any other app |
-| drag on the thin progress line | seek |
-| tap the cover | full-screen cover (tap again to return) |
-| **upper side button (PWR)** / **lower side button (BOOT)** | **volume up / down of the app being shown** (Windows per-app volume, not the PC's master volume), 5 % per press, hold to repeat (max 3 s); a "Volume 65%" pill shows for a second |
+| **Reference board** | **Waveshare ESP32-S3-Touch-LCD-4B** (SKU 32052, "Smart 86 Box") |
+| Module | ESP32-S3-WROOM-1-N16R8: dual-core 240 MHz, 16 MB flash, 8 MB octal PSRAM, Wi-Fi 4 (2.4 GHz) + BLE |
+| Display | 4-inch 480x480 IPS, ST7701 on a 16-bit parallel RGB bus |
+| Touch | GT911 5-point capacitive |
+| Buttons | BOOT (GPIO0) and PWR (read from the AXP2101 power chip over I2C); used as volume down / up |
+| USB | native USB-Serial/JTAG for flashing and logs |
 
-Square covers are shown large and square; widescreen thumbnails (YouTube) as a landscape card. Do not hold the PWR button for more than ~4 seconds: the power chip turns the board off by itself.
-Chrome / Edge change the volume of the whole browser (all tabs share one audio session); Spotify changes only Spotify.
+This board is the **only board currently supported**: the pin map, the panel initialisation and the button handling are specific to it, and
+nothing in the firmware has been tried on another board. Pin map and sources: [docs/hardware.md](docs/hardware.md).
 
-## Start here (new computer or new Claude Code session)
+## Software stack
 
-1. Read [`CLAUDE.md`](CLAUDE.md) — the authoritative project orientation (hardware, rules, milestone plan, flashing safety).
-2. Read this README, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), then the latest file in [`docs/milestones/`](docs/milestones/).
-3. `git status` and `git log --oneline -10`, then continue from the latest *completed* milestone.
-4. Never assume the COM port (`tools\find-board.ps1`) or the ESP-IDF location (`tools\idf.ps1` discovers it).
-
-## Where things live
-
-| What | Where |
+| Part | Stack |
 |---|---|
-| Orientation / rules for Claude Code sessions | [`CLAUDE.md`](CLAUDE.md) |
-| **Architecture + companion HTTP protocol** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| **Milestone docs and evidence** (one per milestone) | [`docs/milestones/`](docs/milestones/) — [M1](docs/milestones/M1-lcd-touch.md), [M2](docs/milestones/M2-ui.md), [MVP](docs/milestones/MVP-media-companion.md), [M8](docs/milestones/M8-player-redesign.md), [M8b](docs/milestones/M8b-art-layout-gestures-volume.md), [M8c](docs/milestones/M8c-session-switching.md), [M8d](docs/milestones/M8d-auto-follow-spotify-options.md), [M9](docs/milestones/M9-idle-screen.md), [M9b](docs/milestones/M9b-idle-source.md) |
-| Hardware facts, verified pin map, sources | [`docs/HARDWARE.md`](docs/HARDWARE.md) |
-| Decisions: framework (ADR-001), companion architecture (ADR-003), obsolete Spotify rules (ADR-002) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
-| **Windows companion app** | [`companion/`](companion/) |
-| Obsolete Spotify client (kept, not built) | [`legacy/`](legacy/README.md) |
-| Firmware (ESP-IDF project) and its provenance | [`firmware/`](firmware/), [`firmware/NOTICE.md`](firmware/NOTICE.md) |
-| Helper scripts | [`tools/`](tools/): `idf.ps1`, `find-board.ps1`, `serial_capture.py`, `set-dev-secrets.ps1`, `analyze_flash_dump.py`, dev-only `screenshot.py` (real display -> PNG, scripted swipes), `contact_sheet.py`, `soak_gestures.py`, `session_test.py` (hardware-in-the-loop test of gestures, source switching and per-app volume) |
-| Factory-backup manifest (hashes, layout, restore steps) | [`backup/factory/MANIFEST.md`](backup/factory/MANIFEST.md) |
-| Waveshare reference downloads (git-ignored, re-fetchable) | `docs/waveshare/` |
+| Firmware | ESP-IDF 5.5.5, LVGL 9.5.0 (via `esp_lvgl_port`), C on FreeRTOS, the Waveshare board support package 2.0.0, `esp_jpeg`; versions pinned in `firmware/dependencies.lock` |
+| Windows companion | Python 3.12, WinRT bindings (`winrt-Windows.Media.Control`) for GSMTC, `pycaw` / `comtypes` for Core Audio, Pillow (artwork), `psutil` (network interfaces), `pystray` and `tkinter` (tray icon and settings window), the standard library's HTTP server and UDP sockets; packaged with PyInstaller |
+| Tools | PowerShell wrappers (`tools/idf.ps1`), esptool, pyserial, Python test and screenshot tools |
 
-## Set up a new computer (Windows)
+## Controls
 
-Prerequisites: Windows 10/11 with `winget` (App Installer), Git and Python 3.12+. PowerShell must be allowed to run local scripts:
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` (once) — or prefix script runs with `powershell -NoProfile -ExecutionPolicy Bypass -File`.
+| Gesture | Action |
+|---|---|
+| Swipe left | next track |
+| Swipe right | previous track |
+| Swipe up / down | switch the media source: the next / previous media session (playing or paused), including the idle screen item; wraps around |
+| Tap the artwork | full-screen artwork (tap again to return) |
+| Drag on the progress bar | seek |
+| Upper side button (PWR) / lower side button (BOOT) | volume up / down of the application shown (5 % per press, hold to repeat) |
+| Shuffle / repeat buttons | Spotify only: shuffle toggle, repeat off / playlist / track |
 
-```powershell
-# 1. Clone (private repo: Git Credential Manager opens a browser sign-in on first use) and look around
-git clone https://github.com/shayansharif532/ESP-32-Spotify.git
-cd ESP-32-Spotify
-git status ; git log --oneline -10
+A swipe needs at least 72 px of mostly straight travel; a diagonal drag does nothing. While the idle screen is shown, horizontal swipes and the
+volume keys do nothing, so no unrelated app can be changed by accident. Do not hold the upper (PWR) button for more than about four seconds:
+the power chip turns the board off by itself.
 
-# 2. ESP-IDF 5.5.5 for the ESP32-S3 via Espressif's installer (~8 GB, ~10 min; tools\eim_config.toml records the original options)
-winget install --id Espressif.EIM-CLI --exact
-#    close and reopen the terminal here so `eim` is on PATH
-eim install -i v5.5.5 -t esp32s3 -p C:\esp -n true --do-not-track true --cleanup true --skip-components-download true
+## Customizable idle screen
 
-# 3. esptool environment — independent of ESP-IDF, used for backup / restore / low-level flashing / serial log capture
-python -m venv tools\venv
-tools\venv\Scripts\python.exe -m pip install -r tools\requirements.txt
+When nothing has played for a configurable time (default 4 s, 2-60 s) the display shows its idle screen; anything that starts playing brings the
+player back at once.
 
-# 4. (optional, ~230 MB, git-ignored) Waveshare's official repo: schematic, pin audit, examples
-git clone --depth 1 https://github.com/waveshareteam/ESP32-S3-Touch-LCD-4B docs\waveshare\official-repo
+* **Themes:** Minimal (near-black), Dark (soft gradient, the default), Neon (violet gradient with an accent glow), Photo (your own picture).
+* **Background picture:** JPG or PNG with **Fill**, **Fit** or **Blur Fill**. The picture is validated, resized and prepared on the PC (exactly
+  480x480, baseline JPEG up to 200 KB); the display never receives your original.
+* **Clock:** large digital clock, 12 or 24 hour, from the PC's local time.
+* **Custom text** (one line), **accent colour** and **delay**.
+* Edited in the companion's tray **Settings** window with a live preview. Nothing can change the settings over the network. Settings are
+  cached on the display, so a reboot needs no transfer.
 
-# 5. Developer Wi-Fi credentials (temporary; password typed hidden; written to the git-ignored firmware\secrets.local.h)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\set-dev-secrets.ps1
+## Getting started
 
-# 6. Build (the first build also downloads LVGL, the Waveshare BSP, ... pinned by dependencies.lock; ~7 min, later builds ~20 s)
-.\tools\idf.ps1 set-target esp32s3
-.\tools\idf.ps1 build
-```
+Full instructions: [docs/development.md](docs/development.md). In short, on Windows with ESP-IDF 5.5.5, Python 3.12 and a Waveshare ESP32-S3-Touch-LCD-4B:
 
-Without `secrets.local.h` the firmware still builds and runs a UI-only demo (no network). `tools\idf.ps1` finds the ESP-IDF install through
-EIM's registry (override: `$env:IDF_ACTIVATE_SCRIPT`), activates it, runs `idf.py` inside `firmware\` and returns you to your directory — no
-special "ESP-IDF shell" needed.
+1. **Build and flash the firmware.** Write your Wi-Fi settings into the git-ignored `firmware/secrets.local.h` (`tools\set-dev-secrets.ps1`),
+   then `.\tools\idf.ps1 set-target esp32s3`, `.\tools\idf.ps1 build` and `.\tools\idf.ps1 -p <port> flash`. Take a backup of the board's factory flash first
+   ([docs/development-history/M0-factory-backup.md](docs/development-history/M0-factory-backup.md)).
+2. **Run the companion:** `python -m desk_media_companion --console` from `companion/` (see [companion/README.md](companion/README.md)), or build the single exe with
+   `companion\build.ps1`. Allow it through the Windows Firewall when asked.
+3. **Pair the display:** in the companion's tray menu choose **Pair a display...**, compare the six-digit code on the PC and on the display and confirm on both.
 
-### Flash and watch the board
+## Security
 
-Plug the USB-C port that is wired to the ESP32-S3 (the one that enumerates as **"USB JTAG/serial debug unit"**, not the UART bridge). Then:
+The display and the companion pair once with a six-digit code that both ends show; afterwards every request is signed, replays are rejected,
+and the companion's answers are signed too. The API is served only to the local network (private, loopback and link-local clients). It is
+authenticated but **not encrypted** (plain HTTP on the LAN). See [docs/security.md](docs/security.md) for the threat model and
+[docs/protocol.md](docs/protocol.md) for the byte-level protocol. No credentials of any online service exist anywhere in the project.
 
-```powershell
-$port = .\tools\find-board.ps1                       # prints e.g. COM5 — the number differs per computer
-.\tools\idf.ps1 -p $port flash                       # writes bootloader @0x0, partition table @0x8000, app @0x10000; never erases the chip
-.\tools\venv\Scripts\python.exe .\tools\serial_capture.py --seconds 20 --reset   # boot log (auto-detects the port; --out FILE to keep it)
-```
+## Limitations
 
-Flashing safety (full list in [`CLAUDE.md`](CLAUDE.md)): build first; stop anything holding the COM port; never `erase-flash` casually; never
-burn eFuses; capture the boot log after every flash. Optional dev self-test: `.\tools\idf.ps1 -DAPP_WIFI_SELFTEST=1 build` drops the Wi-Fi link
-once a minute after it comes up and logs how long the automatic reconnect takes.
+* **Windows only:** the companion uses the Windows media-session and Core Audio APIs.
+* **One reference board:** only the Waveshare ESP32-S3-Touch-LCD-4B is supported.
+* **Browser artwork is soft.** Chromium browsers hand Windows only a ~150 px thumbnail, so 16:9 covers from YouTube are enlarged and look soft;
+  Windows offers no larger image. Spotify covers are sharp.
+* **Browser volume is per browser, not per tab:** all tabs share one audio session, so the whole browser's volume changes; Firefox cannot be matched.
+* **Fonts:** the UI fonts are ASCII Montserrat. Titles with accented letters, CJK, Cyrillic or emoji show missing glyphs until a fallback font is added. The idle screen's custom line is simplified to ASCII on the PC.
+* **Wi-Fi credentials are compile-time development configuration** (`firmware/secrets.local.h`). There is no first-run provisioning portal yet.
+* **Plain HTTP on the LAN:** authenticated after pairing, not encrypted.
+* The PC must be on, on the same network (no client isolation) and running the companion.
+* Shuffle / repeat exist for the Spotify desktop app only (the web player is just a browser tab to Windows).
 
-Notes learned the hard way (this board, native USB port, Windows):
-* The console only streams while the host asserts **DTR**; a **RTS rising edge** resets the chip and the DTR level at that edge selects
-  download mode (DTR=1) or normal boot (DTR=0). Windows' `usbser.sys` only sends a line change when the *other* line is written too —
-  `serial_capture.py` handles all this; never open the port with both DTR and RTS asserted.
-* `idf.py monitor` needs an interactive terminal, so use `serial_capture.py`.
-* `sdkconfig.defaults` routes the console to the native USB-Serial/JTAG port (the second USB-C port, the UART bridge, is not used).
-* After editing `firmware/sdkconfig.defaults`, run `.\tools\idf.ps1 set-target esp32s3` (or delete `firmware\sdkconfig`) so it is re-applied.
+## Project status
 
-### Linux / macOS (untested)
+**Stable** (hardware-tested on the reference board with the test tools, with real Spotify desktop and Chrome / YouTube sessions in the early milestones):
 
-The firmware itself is OS-independent; only the PowerShell wrappers are Windows-specific (and the companion is Windows-only by design).
-Install ESP-IDF 5.5.5 following Espressif's "Get Started" for that version, `source export.sh`, then
-`cd firmware && idf.py set-target esp32s3 build && idf.py -p /dev/ttyACM0 flash` (`/dev/cu.usbmodem*` on macOS), and run
-`python tools/serial_capture.py` from a venv built from `tools/requirements.txt`.
+* Now-playing display, artwork, progress, play / pause / previous / next / seek, per-application volume, source switching, auto-follow, Spotify
+  shuffle / repeat, the idle screen with its themes and picture persistence, and the idle item in the carousel.
+* Wi-Fi recovery (a deliberately dropped link recovered in about 2 s) and PC re-discovery.
+* Soak runs without a reset or heap / stack drift: 24 real touches over 941 s; five-minute gesture soaks (about 115-125 scripted actions);
+  30 idle <-> playback cycles over 315 s; 40 idle-carousel cycles.
+* Details and evidence: [docs/development-history/](docs/development-history/README.md).
 
-## The Windows companion (PC side)
+**Known limitations:** see above. In addition, gestures, the side buttons and the idle-screen fades were mostly checked through the board's virtual finger
+and simulated key presses (the same LVGL input path as the touch controller); a physical check of the upper (PWR) side button and of how the idle screen
+looks on the glass was still open in the logs. A short screen flicker while a *new* idle picture is written to flash is possible and not verified.
 
-```powershell
-cd companion
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m desk_media_companion --console           # runs until Ctrl+C; log: %LOCALAPPDATA%\DeskMediaCompanion\companion.log
-.\.venv\Scripts\python.exe -m desk_media_companion --probe             # print the current media state once and exit
-.\.venv\Scripts\python.exe -m desk_media_companion --install-startup   # optional: start with Windows (per user, no admin); --remove-startup undoes it
-```
+**Future work:**
 
-* **Windows Firewall:** the first time it listens, Windows may ask whether to allow it on the network — choose **Allow**. The display connects to
-  TCP **8765**; the discovery beacon is UDP 8766 outbound. If the display shows "Can't reach your PC", check this first.
-* The PC and the display must be on the same network (same router; "client isolation" must be off).
-* No media app running? Test without any: `pip install winrt-Windows.Media.Playback winrt-Windows.Media.Core`, then
-  `.\.venv\Scripts\python.exe tools\fake_media_session.py` registers a silent test session (title, artwork, progress, next/previous/play/pause).
-* Protocol and design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Quick check from any shell: `curl http://127.0.0.1:8765/now-playing`.
-
-## The factory flash backup is intentionally NOT in GitHub
-
-Before anything was flashed, the board's complete 16 MiB flash (Waveshare's factory firmware) was backed up and verified byte-for-byte.
-That image is **deliberately kept out of this repository**: it is a 16 MiB device-specific dump of Waveshare's proprietary firmware that
-can contain data from earlier users, and Git history would keep it forever. `.gitignore` blocks `*.bin` and everything in
-`backup/factory/` except the manifest. Only the **hashes, partition layout and restore procedure** are committed
-([`backup/factory/MANIFEST.md`](backup/factory/MANIFEST.md)).
-
-* The one copy lives on the original development PC: `backup\factory\factory_full_flash_16MB_mac-2884-85a2-4860_20261011-230234.bin`
-  (SHA-256 `8b4afd76d598df61cb7fb0db086ffd895a1d1f1b798531e9d46eeb377791c6f5`). **Keep a second copy somewhere safe** (cloud drive / USB stick).
-* On a new computer the factory image is **not recoverable from GitHub**. To restore: copy the file back into `backup/factory/`,
-  check the SHA-256, then:
-
-```powershell
-$port = .\tools\find-board.ps1
-.\tools\venv\Scripts\python.exe -m esptool --port $port --flash-mode keep --flash-freq keep --flash-size keep write-flash 0x0 backup\factory\factory_full_flash_16MB_mac-2884-85a2-4860_20261011-230234.bin
-```
-
-If the board does not respond: unplug USB-C, hold **BOOT**, plug USB-C back in, release BOOT, run the command again (ROM download mode can not
-be overwritten, and we never burn eFuses, so the board can not be bricked by flashing).
-
-## Secrets policy
-
-Nothing secret is ever committed. There are **no Spotify credentials anywhere** in the current design. Wi-Fi credentials: during development
-only in the git-ignored `firmware/secrets.local.h`; in the product they live only in the device's NVS (entered through the setup flow,
-Milestone 11). Nothing sensitive is printed to the serial log (`serial_capture.py` also masks credential-shaped strings). `.gitignore` blocks
-`.env*`, `secrets.*`, `*.local.*`, token/credential files, keys, flash dumps, build output, logs and vendor downloads — only `*.example.*`
-templates may be committed. The companion's LAN API is unauthenticated plain HTTP, fenced by LAN-only / Host-header / custom-header rules
-(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); a pairing token comes with Milestone 13. Before pushing: `git status` and `git diff --cached`.
-
-## First-run setup / recovery / reset
-
-*(designed and documented at Milestone 11; planned flow: device opens a temporary Wi-Fi access point -> phone joins -> captive page picks the
-Wi-Fi network and stores it in NVS -> the display finds the PC companion by itself -> Now Playing; a long press of BOOT *while the app is running* (not at power-up: that is the ROM download-mode gesture, and BOOT is the volume-down key during normal use) wipes the
-stored Wi-Fi and re-enters setup. Pairing with the companion comes later, Milestone 13.)*
-
-## Milestones (plan revised 2026-10-12 for the companion architecture)
-
-| # | Milestone | State |
-|---|---|---|
-| 0 | Detect board, confirm hardware, find official docs, choose framework, **back up factory flash** | **done** |
-| 1 | Flash an official Waveshare LCD + touch example; confirm display and touch | **done** (the touch-crash finding is addressed by the M2 display config; see the M1 addendum) |
-| 2 | Own 480x480 UI (placeholder art, title, artist, progress, prev/play/next, art toggle) | **done** - 24 touches / 941 s, no reset ([M2 doc](docs/milestones/M2-ui.md)); a targeted stress soak is still advisable |
-| 3 | Wi-Fi connection + automatic reconnect | **done** - drop recovered in 2.05 s ([MVP doc](docs/milestones/MVP-media-companion.md)) |
-| 4 | **Windows companion** (media session -> LAN HTTP API) *(was: HTTPS test)* | **done** - tested with a fake session, YouTube, Spotify desktop, Chrome |
-| 5 | **ESP32 <-> companion**: discovery, now-playing, progress *(was: Spotify OAuth)* | **done** on hardware |
-| 6 | Real artwork (companion-normalised JPEG) | **done** on hardware (110-177 ms per image) |
-| 7 | Play / pause / previous / next (+ seek) through the media session | **done** for play/pause/next/previous (real taps, Spotify + Chrome); seek wired, not yet seen in a log |
-| — | **MVP gate**: Spotify desktop + YouTube in a browser, real playback | **passed by log evidence** (owner's visual confirmation of the screen still to be given) |
-| 8 | **Main player visual redesign** (big frameless cover, artwork-driven blurred background, clean foreground) | **done** - see [M8 doc](docs/milestones/M8-player-redesign.md) |
-| 8b | **Refinement pass**: widescreen art as a landscape card, Spotify logo removed, swipe gestures (right = next, left = previous), per-app Windows volume, side buttons = volume up / down | **done** - see [M8b doc](docs/milestones/M8b-art-layout-gestures-volume.md) |
-| 8c | **Media-source switching**: horizontal swipes reversed (left = next, right = previous), vertical swipes switch between the PC's media sessions (playing or paused), every command targets the session on screen, sharper Chrome / YouTube thumbnails (PC-side) | **done** - see [M8c doc](docs/milestones/M8c-session-switching.md) |
-| 8d | **Auto-follow restored + Spotify shuffle / repeat**: a manual source swipe is only temporary (auto-follow returns when another app starts playing, the selection closes, or after 20 s idle), Spotify-only shuffle and repeat buttons through Windows' own session controls (no Spotify login) | **done** - see [M8d doc](docs/milestones/M8d-auto-follow-spotify-options.md) |
-| 9 | **Customisable idle screen** (nothing playing): Minimal / Dark / Neon / Photo themes, accent colour, clock, one custom line, your own background picture (Fill / Fit / Blur Fill), all set in the companion's tray **Settings** window and cached on the display; fades to / from the player | **built and verified on hardware**, awaiting the owner's physical review - see [M9 doc](docs/milestones/M9-idle-screen.md) |
-| 9b | **Idle screen as an item of the vertical source ring** (`Spotify <-> Chrome <-> Idle Screen`): a manual, temporary display choice that never pauses anything, never pins (any session starting playing brings the display back), shows no controls and ignores the volume keys | **built and verified on hardware**, awaiting the owner's physical review - see [M9b doc](docs/milestones/M9b-idle-source.md) |
-| 10 | Full-screen album-art polish | |
-| 11 | First-run Wi-Fi setup | |
-| 12 | Companion installer (single `.exe`, auto-start, firewall helper) | |
-| 13 | Pairing / security (token between display and companion) | |
-| — | ~~Birthday intro~~ | **dropped by the owner (2026-10-12)** |
-
-## Git workflow
-
-`main` holds the latest known-good, bootable state; risky or unverified work goes on a branch (`feature/mvp` was merged into `main` at the MVP). Commit after each
-verified milestone or stable checkpoint — see [`CLAUDE.md`](CLAUDE.md) for the commit and testing rules.
+* Full-screen artwork polish (the full-screen cover is the 312 px image enlarged, so it is soft).
+* First-run Wi-Fi provisioning (setup access point and captive page; the reset gesture would be a long press of BOOT while running).
+* Companion installer: a proper installer with a one-click Windows Firewall helper and an update path (the single exe and per-user auto-start already exist).
+* Fallback fonts for non-ASCII titles.
+* A targeted touch stress soak (top band, screen edges, rapid taps).
+* Optional, not started: a browser extension for high-resolution browser artwork (analysis in [M8c](docs/development-history/M8c-session-switching.md)); an enclosure and stand.
 
 ## Repository layout
 
 ```
-CLAUDE.md         project orientation for Claude Code sessions (authoritative; code + milestone docs override stale details)
-backup/factory/   MANIFEST.md only — the 16 MiB factory dump itself is git-ignored on purpose
-companion/        Windows companion app (Python): desk_media_companion/, tools/fake_media_session.py, requirements.txt
-docs/             ARCHITECTURE.md, HARDWARE.md, DECISIONS.md, milestones/ (per-milestone evidence); waveshare/ = git-ignored downloads
-firmware/         the ESP-IDF project: main/, components/{ui,wifi_mgr,pc_media}, sdkconfig.defaults, secrets.example.h
-legacy/           obsolete Spotify-Web-API client (kept for reference, not built)
-tools/            idf.ps1, find-board.ps1, serial_capture.py, set-dev-secrets.ps1, m1_probe/ (M1 diagnostic sidecar), analyze_flash_dump.py
+README.md             this page
+PORTFOLIO.md          short project summary for CVs and portfolios
+CLAUDE.md             orientation for contributors and AI assistants (rules and pitfalls)
+THIRD_PARTY_NOTICES.md, LICENSES/   third-party licences and credits
+companion/            the Windows companion (Python): desk_media_companion/, tests/, tools/, build.ps1
+firmware/             the ESP-IDF project: main/, components/{ui, wifi_mgr, pc_media, idle_screen, side_keys}, partitions.csv
+tools/                idf.ps1, find-board.ps1, serial_capture.py, board-in-the-loop test and screenshot tools
+docs/                 architecture, protocol, security, hardware, development guide, decisions/, development-history/, screenshots/
+backup/               where your own factory flash backup goes (*.bin is git-ignored)
 ```
+
+## Documentation
+
+| Document | Content |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System overview, components, data flow, device states, source-selection model, threading, memory, persistence |
+| [docs/protocol.md](docs/protocol.md) | The companion <-> display protocol: beacon, pairing, authenticated requests, HTTP API |
+| [docs/security.md](docs/security.md) | Threat model and security design |
+| [docs/hardware.md](docs/hardware.md) | The reference board: silicon, peripherals, pin map, side buttons, sources |
+| [docs/development.md](docs/development.md) | Set up a machine, build, flash, run, package, test, troubleshoot |
+| [docs/decisions/](docs/decisions/README.md) | Architecture decision records (ADR-001 ... ADR-008) |
+| [docs/development-history/](docs/development-history/README.md) | The engineering logs of how the project was built, milestone by milestone |
+| [companion/README.md](companion/README.md) | Companion usage, options, data locations |
+| [docs/licensing.md](docs/licensing.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | Licensing status and third-party notices |
+
+## Contributing / development
+
+Start with [docs/development.md](docs/development.md) (setup, build, test tools and their safety rules) and [CLAUDE.md](CLAUDE.md) (project rules,
+flashing safety, secret handling, pitfalls). Keep commits small and verified, never commit secrets, flash dumps or non-synthetic images, and record
+design decisions as ADRs in [docs/decisions/](docs/decisions/README.md).
+
+## License
+
+Licence not yet chosen - see [docs/licensing.md](docs/licensing.md). Third-party components keep their own licences:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+DeskMedia Display is an unofficial hobby project, not affiliated with or endorsed by Spotify, Google, Microsoft, Waveshare, Espressif or LVGL.

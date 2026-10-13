@@ -1,13 +1,13 @@
 # Milestone 8c — reversed swipes, media-source switching, commands bound to the displayed session, browser artwork
 
-Date: 2026-10-12. Branch: `feature/session-switching` (on top of `feature/art-layout-gestures-volume`). Request (owner, after using M8b): swap the horizontal swipe directions, let a vertical swipe browse the media
+Date: 2026-10-12. Branch: `feature/session-switching` (on top of `feature/art-layout-gestures-volume`). Request (maintainer, after using M8b): swap the horizontal swipe directions, let a vertical swipe browse the media
 sessions the PC offers (Spotify, YouTube in Chrome, ... - playing *and* paused), keep the volume keys and the per-app volume, and find out whether the blurry Chrome / YouTube artwork can be improved.
-Decision record: **ADR-005** in `docs/DECISIONS.md`.
+Decision record: [**ADR-005**](../decisions/ADR-005-source-switching-by-vertical-swipe.md).
 
 ![The two real sessions, selected independently](img/m8c-sources.jpg)
 
 *Real screenshots from the board with synthetic covers only (no third-party artwork is committed); left to right: the source pill right after a vertical swipe (name + position dots), a paused source (play
-icon, its own timeline), and a 16:9 source as a landscape card. The same was verified with the owner's real Spotify (paused: play icon, 0:22 / 3:01) and Chrome / YouTube (playing: pause icon, 16:9 card) sessions on the real
+icon, its own timeline), and a 16:9 source as a landscape card. The same was verified with the maintainer's real Spotify (paused: play icon, 0:22 / 3:01) and Chrome / YouTube (playing: pause icon, 16:9 card) sessions on the real
 display, each selected independently by a vertical swipe; those screenshots are kept locally in the git-ignored `logs/shots/` (`real_chrome_steady.png`, `real_spotify_steady.png`, `real_both_sources.jpg`).*
 
 ## 1. Gestures
@@ -30,14 +30,14 @@ and a press that travelled > 24 px is never a tap. Horizontal swipes do nothing 
 `GlobalSystemMediaTransportControlsSessionManager.get_sessions()` lists every media session (reading all of them costs < 5 ms, so nothing is cached). `desk_media_companion/sources.py` is the pure model (21 unit tests);
 `media.py` applies it:
 
-* **Swipe list ("ring")**: readable sessions that are not `closed` and carry a title or an artist - **playing and paused alike** - plus whatever is on screen. A dead session (the owner's PC has `PSExpressCore.exe`, which
+* **Swipe list ("ring")**: readable sessions that are not `closed` and carry a title or an artist - **playing and paused alike** - plus whatever is on screen. A dead session (the maintainer's PC has `PSExpressCore.exe`, which
   answers "device not ready") and metadata-less sessions are left out. Fixed order (alphabetical by app name, so it does not jump around when playback states change); wraps at both ends:
   `Chrome -> Python (the test session) -> Spotify -> Chrome ...`.
 * **Auto mode** (default, and after a restart): follow the best session - the system's current session if it is playing, else any playing one, else the app that played last, else the current one, else the rest.
 * **Pinned mode**: a vertical swipe pins the display to the session it lands on. From then on artwork, title, artist, timeline, play/pause, next/previous, seek and volume all belong to *that* session, and another app
   becoming active does **not** take over. When the pinned session disappears the pin is dropped and auto mode takes over (`POST /control/source-auto` and a companion restart also return to auto).
   Consequence worth knowing: a *paused* pinned session keeps the screen even if something else starts playing - a swipe moves on. (A "release the pin after N minutes of silence" rule is a one-constant change if the
-  owner prefers it.)
+  maintainer prefers it.)
 * The swipe is relative to **the app the display shows** (`from=`), not to whatever the companion currently thinks, so a session that auto-switched a moment ago cannot make the swipe jump two places.
 
 ## 3. Every command names the session on screen
@@ -63,10 +63,10 @@ A source switch answers with the new `/now-playing` snapshot, so the display swi
 * **Chromium asks for 150 px itself**: `content/browser/media/system_media_controls/system_media_controls_notifier.cc` has `kMinImageSize = 71` and `kDesiredImageSize = 150` and calls
   `ObserveImages(kArtwork, kMinImageSize, kDesiredImageSize, ...)`. Chrome picks the best match from the page's artwork list for that size and hands Windows that, so the ~150 px thumbnail (150x83 for 16:9) is a Chrome
   decision that no Windows API can change.
-* Moreover one real sample (from the owner's Chrome session) was a *square album cover inside a 16:9 frame with black pillars*: the companion trims the bars, so it ended up as an **86x83 px** picture enlarged to
+* Moreover one real sample (from the maintainer's Chrome session) was a *square album cover inside a 16:9 frame with black pillars*: the companion trims the bars, so it ended up as an **86x83 px** picture enlarged to
   312 px. No algorithm recovers that.
 
-**B. PC-side processing (done).** All resizing is on the PC (Lanczos); the ESP32 only decodes a ready 432x242 / 312x312 baseline JPEG. `tools/art_benchmark.py` shrinks local high-resolution pictures (6 Windows wallpapers
+**B. PC-side processing (done).** All resizing is on the PC (Lanczos); the ESP32 only decodes a ready 432x242 / 312x312 baseline JPEG. `companion/tools/art_benchmark.py` shrinks local high-resolution pictures (6 Windows wallpapers
 + a text thumbnail) to 150 px exactly like Chromium delivers them, rebuilds the card with each candidate and scores it against the original (mean of 7 pictures; `edges` = gradient energy relative to the original,
 1.0 = as crisp as the original):
 
@@ -81,25 +81,25 @@ A source switch answers with the new `/now-playing` snapshot, so the display swi
 The honest summary: every candidate lands within ~0.1 of the same sharpness - the information is not in the 150 px image. The shipped pipeline (`artwork.enhance_upscale`) was chosen because it is best on PSNR with no
 ringing: the unsharp mask is applied **only at real edges** (Sobel mask; flat areas, skies and JPEG block noise stay untouched), clipped to the local min / max of the un-sharpened picture (no halos), and its strength **ramps with the
 enlargement** (0 below 1.5x, full at 2.5x). **Spotify is untouched**: its 233 px cover drawn at 312 px is a 1.34x enlargement, below the ramp, and a unit test pins the JPEG to be byte-identical to plain Lanczos.
-On the real display (same Chrome frame, `tools/art_compare.py` and screenshots of the board: `logs/shots/art_before_chrome.png` vs `art_after_chrome.png`) the "after" has visibly crisper edges (eye outlines, highlights, hair)
+On the real display (same Chrome frame, `companion/tools/art_compare.py` and screenshots of the board: `logs/shots/art_before_chrome.png` vs `art_after_chrome.png`) the "after" has visibly crisper edges (eye outlines, highlights, hair)
 with no halos or noise in flat areas - a modest but real improvement, still clearly a ~150 px source.
 
 **C. Is a genuinely higher-resolution image possible *without* an extension?** **No.** Everything an outside program can legitimately see is the 150 px stream above. The ways around it, and why none was built:
 
 | Idea | Verdict |
 |---|---|
-| Search YouTube by title and guess the video | rejected by the owner (brittle) and rightly so |
+| Search YouTube by title and guess the video | rejected by the maintainer (brittle) and rightly so |
 | Read the address bar with UI Automation | only the foreground tab, not necessarily the one playing; breaks with browser UI changes |
 | Chrome remote-debugging port | needs a launch flag and opens a debug port to every local program |
 | Chrome's `Media History` database | locked while Chrome runs, profile internals, privacy-sensitive |
 | **Small Chrome / Edge extension** | the only clean route - see below |
 
-*If the owner ever wants it:* a Manifest V3 extension with a content script (main world) reads `navigator.mediaSession.metadata` (title, artist, and the page's own `artwork: [{src, sizes}]` list - the same object Chrome used
+*If the maintainer ever wants it:* a Manifest V3 extension with a content script (main world) reads `navigator.mediaSession.metadata` (title, artist, and the page's own `artwork: [{src, sizes}]` list - the same object Chrome used
 to build the 150 px thumbnail) whenever it changes, and posts it to `http://127.0.0.1:8765/browser-media` (loopback only, `X-Desk-Client`). The companion pairs it with the Chrome / Edge GSMTC session by exact
 title + artist equality (both come from the same metadata object, so no guessing), downloads the largest suitable image itself (the PC has internet; cached by URL), and serves *that* as the session's artwork, falling back
-to the 150 px thumbnail whenever no extension report matches. Costs: one extension per browser on the recipient's PC (an unpacked extension needs developer mode and a nag banner; a store listing needs a
+to the 150 px thumbnail whenever no extension report matches. Costs: one extension per browser on the user's PC (an unpacked extension needs developer mode and a nag banner; a store listing needs a
 developer account), the PC fetching images from the internet, and upkeep when sites change. **Recommendation: do not build it now** - Spotify, the main music source, is already sharp and the gain is only for browser tabs.
-Whether YouTube / YouTube Music supply large artwork entries should be checked on the owner's own machine before anyone commits to it.
+Whether YouTube / YouTube Music supply large artwork entries should be checked on the maintainer's own machine before anyone commits to it.
 
 ## 6. Volume keys follow the source
 
@@ -110,24 +110,24 @@ A paused browser tab may hold no audio session, in which case the pill says "No 
 ## 7. Verification
 
 * Unit tests: `python -m unittest discover -s companion/tests` - **47 pass** (14 artwork + 4 new upscale tests, 21 session-model tests, 8 HTTP-routing tests).
-* `companion/tools/api_check.py` (HTTP only, against a separate companion instance, selection requests only): ring walked forwards and backwards on the owner's real sessions, wrap-around, stale `from`, commands aimed at a missing
+* `companion/tools/api_check.py` (HTTP only, against a separate companion instance, selection requests only): ring walked forwards and backwards on the maintainer's real sessions, wrap-around, stale `from`, commands aimed at a missing
   session refused, back to auto - all pass.
-* `tools/session_test.py` (hardware in the loop: the board's virtual finger / simulated keys, judged from the companion's log and `/sources`; silent fake session `python.exe` next to the owner's **real Spotify and Chrome / YouTube**):
+* `tools/session_test.py` (hardware in the loop: the board's virtual finger / simulated keys, judged from the companion's log and `/sources`; silent fake session `python.exe` next to the maintainer's **real Spotify and Chrome / YouTube**):
   0 failures. It proves: finger left sends NEXT and right sends PREVIOUS to the displayed session (and swipes that start on the title text work); a diagonal swipe sends nothing; a horizontal swipe from the progress line only
   seeks; a vertical swipe from the progress line only seeks and does not switch source; tapping the cover sends no media command; swipe up / down walk the 3-source ring forwards / backwards and wrap around with **no media command and no
   playback-state change anywhere**; a paused session stays selectable and shows its state, play resumes exactly that session; a pinned session is kept while others play; when the pinned session disappears the display falls
   back to auto and the list no longer offers it; the side keys change the displayed app's own volume (fake: 5 -> 0 -> 5 %, real Spotify 55 -> 60 -> 55 %, real Chrome 100 -> 95 -> 100 %) and no other app's volume or the master volume (4 devices) moved.
-* `companion/tools/pin_check.py` (HTTP only, separate test instance): a real source is pinned while the silent fake session plays (and the owner's own Spotify happened to start playing during one run) - the display of that
+* `companion/tools/pin_check.py` (a tool for the pin model of that time; since removed) (HTTP only, separate test instance): a real source is pinned while the silent fake session plays (and the maintainer's own Spotify happened to start playing during one run) - the display of that
   instance stayed on the pinned source for the whole 8 s; closing the fake left the pin in place (the pinned session still exists).
 * Gesture soak (`tools/soak_gestures.py` + `tools/analyze_soak.py`, 5 minutes of random swipes in all four directions, diagonals, seek-bar swipes, taps and side-key presses / holds; the vertical swipes
-  also walked the display over the owner's real sessions and back, selection only): 115 scripted actions (112 seen by the board, 43 source switches applied), **0 resets / panics / watchdogs**,
+  also walked the display over the maintainer's real sessions and back, selection only): 115 scripted actions (112 seen by the board, 43 source switches applied), **0 resets / panics / watchdogs**,
   uptime 61 -> 372 s without a break, internal heap free 152.9 KB first and last (stays 145 - 153 KB), PSRAM free constant at 3.91 MB, LVGL stack free minimum constant at 20.1 KB.
-* Real-display screenshots with the owner's sessions: Chrome (landscape card, pause icon) -> swipe up -> Spotify (paused: play icon, timeline, "Spotify" pill with 2 dots) -> swipe down -> Chrome, in `logs/shots/`.
+* Real-display screenshots with the maintainer's sessions: Chrome (landscape card, pause icon) -> swipe up -> Spotify (paused: play icon, timeline, "Spotify" pill with 2 dots) -> swipe down -> Chrome, in `logs/shots/`.
 * Frozen exe (`companion/build.ps1`, 18.4 MB) starts and serves `/health`, `/sources`, `/now-playing`, `/artwork`.
 
 ## 8. Known issues / open points
 
-* **A real finger was not used by me**: gestures were driven through the board's virtual finger, which walks the same LVGL input path as the touch controller; the *physical* feel (distance, speed, the upper PWR key) needs the owner.
+* **A real finger was not used by me**: gestures were driven through the board's virtual finger, which walks the same LVGL input path as the touch controller; the *physical* feel (distance, speed, the upper PWR key) needs the maintainer.
 * A paused pinned session keeps the screen (section 2) - by design, adjustable.
 * Chrome / YouTube art stays soft (a ~150 px source). Only a browser extension could change that (section 5C).
 * Two sessions that Windows reports under one app id (e.g. two browser profiles) appear as one source.

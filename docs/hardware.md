@@ -1,5 +1,8 @@
 # Hardware reference — Waveshare ESP32-S3-Touch-LCD-4B (SKU 32052, "Smart 86 Box")
 
+The reference (and currently only supported) board of the DeskMedia Display project. See [architecture.md](architecture.md) for how the
+firmware uses it and [development.md](development.md) for building and flashing.
+
 Everything below was cross-checked from independent sources. Evidence tags:
 
 * **[board]** observed on *this* unit (esptool, eFuses, boot log of the factory firmware)
@@ -19,11 +22,11 @@ Everything below was cross-checked from independent sources. Evidence tags:
 |---|---|
 | Module | ESP32-S3-WROOM-1-**N16R8** (wiki, schematic) |
 | Chip | ESP32-S3 (QFN56) rev v0.2, dual-core LX7 240 MHz, Wi-Fi 4 + BLE 5, LP core |
-| MAC | `28:84:85:a2:48:60` |
+| MAC | `xx:xx:xx:xx:xx:xx` (redacted; unique per unit) |
 | Flash | 16 MB, **quad** (4 data lines), 3.3 V (VDD_SPI forced to 3.3 V by eFuse); JEDEC mfg 0x46 / dev 0x4018; app uses QIO |
 | PSRAM | 8 MB **octal**, vendor AP_3v3, 85 °C grade; passes the SPI SRAM memory test at boot. Waveshare's official example runs it at 80 MHz (`CONFIG_SPIRAM_MODE_OCT` + `CONFIG_SPIRAM_SPEED_80M`) |
 | Security | secure boot OFF, flash encryption OFF, JTAG/USB-JTAG/download mode all enabled, eFuses untouched |
-| USB | two USB-C ports. **Native USB** (ESP32-S3 USB-Serial/JTAG, `VID_303A PID_1001`, enumerates as `COM5`) is the one in use. The second port is a USB-to-UART bridge (UART0). Native port console only streams while the host asserts **DTR** — `idf.py monitor` does this; a raw serial tool must too |
+| USB | two USB-C ports. **Native USB** (ESP32-S3 USB-Serial/JTAG, `VID_303A PID_1001`, enumerates as a COM port whose number differs per computer: `toolsind-board.ps1` prints it) is the one in use. The second port is a USB-to-UART bridge (UART0). Native port console only streams while the host asserts **DTR** — `idf.py monitor` does this; a raw serial tool must too |
 | Buttons | **BOOT** (GPIO0) and **PWR** (AXP2101 PWRON). There is **no RESET button**. Both are the two "side buttons" on one board edge; this project uses them as volume down (BOOT, lower) / volume up (PWR, upper) - see "Side buttons" below. |
 
 ## Peripherals
@@ -36,7 +39,7 @@ Everything below was cross-checked from independent sources. Evidence tags:
 | PMIC | AXP2101 | I2C 0x34 [audit] | the BSP never touches it and Waveshare's BSP-only LVGL demo still lights the panel; the factory firmware does init it ("Init PMU SUCCESS"). To be confirmed in Milestone 1 |
 | IMU | QMI8658 | I2C 0x6B [audit] | |
 | RTC | PCF85063 | I2C (0x51 per datasheet) | battery-backed only if a cell is attached |
-| Audio | ES8311 codec + ES7210 ADC + 8 ohm/2 W speaker header | I2S | **not used by this project** (Spotify plays on another device) |
+| Audio | ES8311 codec + ES7210 ADC + 8 ohm/2 W speaker header | I2S | **not used by this project** (the display makes no sound; audio plays on the PC) |
 | Wireless | 2.4 GHz Wi-Fi + BLE 5 on-module antenna | | |
 
 Shared I2C bus: **SDA = GPIO47, SCL = GPIO48** (400 kHz in the BSP, internal pull-ups enabled) [audit/bsp/ard].

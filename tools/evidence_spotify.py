@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Development tool: captures the synthetic-cover evidence pictures for docs/milestones/M8d (Spotify shuffle / repeat buttons).
+"""Development tool: captures the synthetic-cover evidence pictures for docs/development-history/M8d (Spotify shuffle / repeat buttons).
 
     tools\\venv\\Scripts\\python.exe tools\\evidence_spotify.py logs\\shots\\m8d
 
 Needs the board with dev firmware and a companion started with  --dev-tools --treat-as-spotify python.exe , so that the silent fake
-test session (synthetic cover) counts as "Spotify" and shows the buttons. The owner's real sessions are only ever *selected*.
+test session (synthetic cover) counts as "Spotify" and shows the buttons. The user's real sessions are only ever *selected*.
 """
 import os
 import subprocess

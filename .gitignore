@@ -1,11 +1,11 @@
 # =============================================================================
-# ESP32 Spotify Now-Playing display - git ignore policy
+# DeskMedia Display - git ignore policy
 #
-#   NOTHING secret and NOTHING large / device-specific is ever pushed:
-#     * factory flash dumps stay on the owner's own machines (see backup/factory/MANIFEST.md)
-#     * Wi-Fi passwords and Spotify tokens / codes / secrets live only in the device's NVS
-#       or in local, ignored files - never in source, logs or commits
-#     * vendor downloads and build output are re-creatable (see README "Set up a new computer")
+#   NOTHING secret, personal, large or device-specific is ever pushed:
+#     * factory flash dumps stay on the maintainer's own machines (see docs/development-history/M0-factory-backup.md)
+#     * Wi-Fi passwords, the pairing key and any tokens live only in the device's NVS, in the companion's
+#       per-user (DPAPI-protected) data folder or in local, ignored files - never in source, logs or commits
+#     * vendor downloads and build output are re-creatable (see docs/development.md)
 #
 #   If a rule here blocks something that really must be committed (e.g. a firmware
 #   asset that happens to be a .bin), add a narrow "!negation" below or `git add -f`
@@ -13,10 +13,10 @@
 # =============================================================================
 
 # --- 1. FACTORY FIRMWARE / FLASH DUMPS (never push) --------------------------------
-# The whole-chip backup is a 16 MiB, device-specific image. Only its hashes and the
-# restore steps (backup/factory/MANIFEST.md) are committed.
-backup/factory/*
-!backup/factory/MANIFEST.md
+# The whole-chip backup is a 16 MiB, device-specific image: it is never committed, only the
+# procedure for making and restoring one (docs/development-history/M0-factory-backup.md, backup/README.md) is.
+backup/*
+!backup/README.md
 backup/**/*.bin
 *.bin
 *.dump
@@ -25,7 +25,7 @@ backup/**/*.bin
 *.nvs
 
 # --- 2. SECRETS, CREDENTIALS, PERSONAL CONFIG (never push) -------------------------
-# Wi-Fi passwords, Spotify access/refresh tokens, authorization codes, client secrets,
+# Wi-Fi passwords, the pairing key, access/refresh tokens, authorization codes, client secrets,
 # private keys. Only templates named *.example.* may be committed.
 .env
 .env.*
@@ -53,6 +53,10 @@ wifi*.txt
 *token*.env
 *.token
 *.tokens
+pairing*.dat
+pairing*.json
+**/pairing/
+*.dpapi
 *.pem
 *.key
 *.p12

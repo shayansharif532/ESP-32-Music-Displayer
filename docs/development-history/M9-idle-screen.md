@@ -1,7 +1,7 @@
 # Milestone 9 — customisable idle screen
 
-Date: 2026-10-12. Branch: `feature/idle-screen` (on top of `feature/auto-follow-spotify-options`). Request (owner): replace the generic *"Nothing playing / Play something on your PC"* player placeholder by a proper idle screen that the
-end user customises from the Windows companion - no reflashing, no command line - as a **generic product feature**. Anything personal (a name, a photo, a fandom theme) stays local data on the user's own PC. Decision record: **ADR-007** in `docs/DECISIONS.md`.
+Date: 2026-10-12. Branch: `feature/idle-screen` (on top of `feature/auto-follow-spotify-options`). Request (maintainer): replace the generic *"Nothing playing / Play something on your PC"* player placeholder by a proper idle screen that the
+end user customises from the Windows companion - no reflashing, no command line - as a **generic product feature**. Anything personal (a name, a photo, a custom theme) stays local data on the user's own PC. Decision record: [**ADR-007**](../decisions/ADR-007-customisable-idle-screen.md).
 
 ![The idle themes, captured from the board; the picture is a made-up landscape](img/m9-idle-themes.jpg)
 
@@ -50,7 +50,7 @@ Result: exactly 480x480, a **baseline JPEG** (the ESP32 decoder is baseline-only
 ## 3. Protocol
 
 `/now-playing` gains `any_playing`, `idle_v` (the settings version) and `clock_ms` (PC local time, ms since the epoch); two read-only routes: `GET /idle` (settings JSON + the picture's size / CRC-32) and `GET /idle/image` (the JPEG, `X-Idle-Crc`).
-**Settings cannot be changed over HTTP** - only the companion's own window edits them (the API is still unauthenticated until Milestone 13). Details: `docs/ARCHITECTURE.md`.
+**Settings cannot be changed over HTTP** - only the companion's own window edits them (the API is still unauthenticated until Milestone 13). Details: [`docs/architecture.md`](../architecture.md).
 
 ## 4. Display
 
@@ -67,9 +67,9 @@ Result: exactly 480x480, a **baseline JPEG** (the ESP32 decoder is baseline-only
 
 Unit tests: **98 pass** (70 before + 25 in `test_idle.py` + 3 route tests in `test_server.py`).
 
-Board-in-the-loop, `tools/idle_test.py` - an in-process companion that sees **only two silent fake sessions** (so the owner's real apps and display are never touched), the board's serial log and real screenshots of its LVGL screen. Results on the board (dev build):
+Board-in-the-loop, `tools/idle_test.py` - an in-process companion that sees **only two silent fake sessions** (so the maintainer's real apps and display are never touched), the board's serial log and real screenshots of its LVGL screen. Results on the board (dev build):
 
-| # | Owner's check | Result |
+| # | Maintainer's check | Result |
 |---|---|---|
 | 1 | nothing playing -> idle appears | idle screen at boot with the PC connected (4.5 s after power-up); screenshot: Dark theme, large clock, "Nothing playing" |
 | 2 | a session starts -> idle changes to it at once | player after **0.2-0.3 s**, showing that session |
@@ -84,12 +84,12 @@ Board-in-the-loop, `tools/idle_test.py` - an in-process companion that sees **on
 
 Also checked: the 4 themes and accents, the custom line / no-clock layouts, tap-to-peek (with and without a session), and the packaged exe (`companion/build.ps1`, now 23.6 MB with tkinter + pystray): it starts, serves `/idle` and the new `/now-playing` fields, opens the settings window, logs no errors.
 
-## 6. Not verified / for the owner
+## 6. Not verified / for the maintainer
 
-* **The look on the real panel** - the screenshots are of the LVGL buffer; colours, dithering and fade smoothness on the glass are the owner's to judge.
+* **The look on the real panel** - the screenshots are of the LVGL buffer; colours, dithering and fade smoothness on the glass are the maintainer's to judge.
 * **A brief screen flicker while a *new picture* is being written to flash** (about 1-2 s, in 4 KB steps with short pauses) is possible: the RGB panel reads PSRAM while the flash is busy and the project does not enable the IRAM-safe RGB ISR. Only pressing Apply with a *new picture* does it; changing text, theme, accent or clock writes only NVS. If it is visible it can be hidden by writing only while the idle screen is up.
 * The tray icon in the real exe (the icon area is not capturable from here); the window itself was checked.
-* The owner's own picture / real Spotify and Chrome through this feature: the tests used the silent fake sessions on purpose.
+* The maintainer's own picture / real Spotify and Chrome through this feature: the tests used the silent fake sessions on purpose.
 
 ## 7. Files
 

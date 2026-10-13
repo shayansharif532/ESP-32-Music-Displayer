@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cases A-E of the auto-follow model with the owner's REAL Spotify and Chrome / YouTube sessions (no fakes), through the companion on
+"""Cases A-E of the auto-follow model with the user's REAL Spotify and Chrome / YouTube sessions (no fakes), through the companion on
 port 8765. It presses play / pause on the real apps a few times, so it refuses to start unless BOTH are paused right now (the owner is
 not listening / watching), mutes both apps' own Windows volume for the duration (restored at the end), and puts every play state
 back as it found it.
@@ -86,7 +86,7 @@ def main() -> int:
         print("needs both Spotify and a Chrome media session; found", st0)
         return 2
     if st0[SP] == "playing" or st0[CH] == "playing":
-        print("refusing: something is playing right now (", st0, ") - the owner may be using it. Pause both first.")
+        print("refusing: something is playing right now (", st0, ") - someone may be using it. Pause both first.")
         return 3
     vol0 = {a: http("GET", f"/volume?app={a}").get("volume") for a in (SP, CH)}
     print("start:", st0, "volumes", vol0)

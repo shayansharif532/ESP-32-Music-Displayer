@@ -1,11 +1,11 @@
 # Milestone 9b — the idle screen as an item of the vertical source ring
 
-Date: 2026-10-12. Branch: `feature/idle-source` (on top of `feature/idle-screen`). Request (owner, after using M9): include the idle screen in the same vertical swipe list as the media sessions -
-`Spotify <-> Chrome / YouTube <-> Idle Screen` - as a *display choice*, with auto-follow kept intact. Decision record: **ADR-008** in `docs/DECISIONS.md`.
+Date: 2026-10-12. Branch: `feature/idle-source` (on top of `feature/idle-screen`). Request (maintainer, after using M9): include the idle screen in the same vertical swipe list as the media sessions -
+`Spotify <-> Chrome / YouTube <-> Idle Screen` - as a *display choice*, with auto-follow kept intact. Decision record: [**ADR-008**](../decisions/ADR-008-idle-screen-as-source-ring-item.md).
 
 ![The player, the "Idle Screen" pill right after swiping up, and the idle screen it lands on - synthetic fake sessions only](img/m9b-idle-source.jpg)
 
-*Real screenshots from the board with the silent fake test sessions (nothing from the owner's real apps). Left: the player (session 2 of 3). Middle: 0.25 s after swiping up - the idle screen with the subtle "Idle Screen" pill (three dots, the third is the idle item). Right: the idle screen while the session keeps playing in the background.*
+*Real screenshots from the board with the silent fake test sessions (nothing from the maintainer's real apps). Left: the player (session 2 of 3). Middle: 0.25 s after swiping up - the idle screen with the subtle "Idle Screen" pill (three dots, the third is the idle item). Right: the idle screen while the session keeps playing in the background.*
 
 ## 1. Behaviour
 
@@ -34,11 +34,11 @@ Unit tests: **113 pass** (98 + 13 model tests + 2 route / guard tests).
 * `tools/idle_source_test.py` - isolated, API level (own companion, two silent fake sessions, the real Windows media API): the ring `[B, A, Idle Screen]`, swipe from A onto Idle (flagged, 3 of 3), A not paused, six kinds of media / volume request refused for `idle`,
   still on Idle after 23 s, swipes down / up from Idle (wraps both ways), a starting session and a resuming one both end it, `source-auto` clears it - **0 failures**.
 * `tools/auto_follow_test.py` (the earlier isolated selection test, 48 checks: auto-follow, manual selections, Spotify buttons) was kept in step (it steps over the idle item with a `hop()` helper and expects "one session + Idle Screen" to be two sources) - **48 / 48**.
-* `tools/session_test.py` (the board's gesture / ring / play-pause / volume test, with the owner's real Chrome next to the fake session): the ring is now `[Chrome, Python, Idle Screen]` and it walks it forwards and backwards with wrap-around; horizontal swipes, title swipes, diagonal, progress-bar swipes, taps, play / pause, paused sources, auto-follow - **31 / 31 passed**, then the run stopped itself
+* `tools/session_test.py` (the board's gesture / ring / play-pause / volume test, with the maintainer's real Chrome next to the fake session): the ring is now `[Chrome, Python, Idle Screen]` and it walks it forwards and backwards with wrap-around; horizontal swipes, title swipes, diagonal, progress-bar swipes, taps, play / pause, paused sources, auto-follow - **31 / 31 passed**, then the run stopped itself
   at its safety guard (the real Chrome had become the displayed session, and the test never presses media controls on real sessions). Side-button volume on a normal session is checked in the carousel phase below.
 * `tools/idle_test.py --only carousel,...` - on the board, with real virtual-finger swipes, key presses and screenshots: **see the table below**.
 
-| # | Owner's check | Result on the board (real virtual-finger swipes, key presses, screenshots) |
+| # | Maintainer's check | Result on the board (real virtual-finger swipes, key presses, screenshots) |
 |---|---|---|
 | 1 | Spotify + Chrome + Idle all appear in vertical cycling | `/sources` and the swipes walk `[YouTube-like, Spotify-like, Idle Screen]`; the snapshot counts 3 sources (the Spotify-like session is 2 of 3) |
 | 2 | Idle can be reached while Spotify plays | a swipe up on the player shows the idle screen after **0.7 s**, with the "Idle Screen" pill (3 dots) drawn below the caption; the companion reports `idle_selected: true` |
@@ -52,10 +52,10 @@ Unit tests: **113 pass** (98 + 13 model tests + 2 route / guard tests).
 
 Note on the serial log: the USB console very occasionally drops a log line (about 2 in 600 observed); the soak therefore verifies every cycle through the companion's own state (`idle_selected` after each swipe) and tolerates a missing log line.
 
-## 4. Not verified / for the owner
+## 4. Not verified / for the maintainer
 
 * The look and feel on the real panel (the pill, the fade, the swipe on the idle screen) and the real finger: all the swipes here are the board's virtual finger through the real LVGL input path.
-* Real Spotify / Chrome: the tests use the silent fake sessions (same Windows API); with the owner's apps `tools/real_cases.py` was kept in step (it steps over the idle item) but not re-run while the owner was using them.
+* Real Spotify / Chrome: the tests use the silent fake sessions (same Windows API); with the maintainer's apps `tools/real_cases.py` was kept in step (it steps over the idle item) but not re-run while the maintainer was using them.
 * Choice made where the request left room: while the idle screen is shown the side volume keys do **nothing** (no "most recently displayed session" fallback), documented in ADR-008.
 
 ## 5. Files

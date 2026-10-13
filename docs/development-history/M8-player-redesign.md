@@ -35,11 +35,11 @@ Layout (480x480): status line y 2, cover y 18..330 (x 84..396), title y 336 (26 
 
 * **Real-display screenshots** with the new `tools/screenshot.py` (dev build `-DAPP_DEV_TOOLS=1` + companion `--dev-tools`): the board renders its LVGL screen to RAM and sends it
   over USB serial (CRC-checked), and the PNG was inspected for seven different covers (bright, dark, colourful, flat, grayscale, 16:9 YouTube thumbnail, a very wide
-  anime frame), for the placeholder state and for the full-screen mode (tap the cover; tap again returns). Findings from the first round were fixed:
+  banner-like frame), for the placeholder state and for the full-screen mode (tap the cover; tap again returns). Findings from the first round were fixed:
   muddy grey background on bright covers (-> adaptive darkening), banding in the no-art gradient (-> baked dithered gradient), dead bars around wide art
   (-> blurred fill), contour bands in smooth covers (-> RGB888 decode + dither), status line showing the previous app (-> event-order bug).
-* **Controls still work with the new UI**: the owner pressed the on-screen buttons while the redesign was running; the companion log shows
-  `control playpause` and `control next` from the board (192.168.1.152) executed on the test session, and the health line shows no resets.
+* **Controls still work with the new UI**: the maintainer pressed the on-screen buttons while the redesign was running; the companion log shows
+  `control playpause` and `control next` from the board (192.168.1.50) executed on the test session, and the health line shows no resets.
   (Real taps are the only thing the screenshot tool cannot replace: it can press the cover, and play/next/prev only on the silent test session.)
 * Artwork loading, title/artist updates, progress, play/pause, previous/next: unchanged code paths, re-exercised after the redesign (see log excerpts in the commit).
 
@@ -49,4 +49,4 @@ Layout (480x480): status line y 2, cover y 18..330 (x 84..396), title y 336 (26 
 * Full-screen mode stretches the 312 px cover to 456 px (soft) - Milestone 10.
 * No fade between tracks (the background swaps instantly).
 * The idle / "nothing playing" screen still reuses this layout with a message - Milestone 9 replaces it with the customisable idle screen (shown only while the PC is connected and nothing plays).
-* The owner's own visual judgement of the new look is still to be collected.
+* The maintainer's own visual judgement of the new look is still to be collected.

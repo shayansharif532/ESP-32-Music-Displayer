@@ -1,9 +1,9 @@
 # Milestone 1 — official Waveshare LVGL demo on the real board
 
 Goal: build Waveshare's official LVGL demo for *this* board, flash it, confirm LCD + touch, watch the serial console.
-Date: 2026-10-11. Board: ESP32-S3-Touch-LCD-4B on `COM5` (native USB-Serial/JTAG). Scope limited to Milestone 1 by the owner.
+Date: 2026-10-11. Board: ESP32-S3-Touch-LCD-4B on a COM port (native USB-Serial/JTAG). Scope limited to Milestone 1 by the maintainer.
 
-**Status (updated 2026-10-12): display OK (owner-confirmed); touch input works; BUT the demo + sidecar build crashed on touches
+**Status (updated 2026-10-12): display OK (maintainer-confirmed); touch input works; BUT the demo + sidecar build crashed on touches
 in the demo's top tab-bar area — see [Touch-test addendum](#touch-test-addendum-2026-10-12). Open item for the start of Milestone 2.**
 The "boots cleanly, no resets" statements below describe the *idle* board (100 s+ of observation) and remain true; they do not cover
 touch interaction.
@@ -50,7 +50,7 @@ PSRAM free **6,896,136 B** — all flat, i.e. no leaks, no resets, no errors, no
 * Not provable from a PC: that the *pixels look right* and that *touch lands where the finger is*. That needs eyes and a finger.
   The sidecar makes it checkable: touch down / move / up with x,y go to the serial log, and a yellow dot with "x,y" follows the finger.
 
-## Owner checklist (needs a human)
+## Maintainer checklist (needs a human)
 
 1. Screen shows the LVGL "widgets" dashboard (tabs, sliders, switches, small FPS/CPU counter bottom-right); colours correct
    (nothing red<->blue swapped), image stable (no shifting/flicker/snow), backlight on.
@@ -64,19 +64,19 @@ PSRAM free **6,896,136 B** — all flat, i.e. no leaks, no resets, no errors, no
   2 frame buffers + `avoid_tearing` for smooth animation.
 * The factory image used XIP-from-PSRAM for 3.6 MB of assets; this build still copies code + rodata to PSRAM (Waveshare's settings) and leaves
   ~6.9 MB of PSRAM free — plenty for album art.
-* Console on native USB needs DTR; reset/boot-mode selection is via RTS/DTR edges; see README "Notes learned the hard way".
+* Console on native USB needs DTR; reset/boot-mode selection is via RTS/DTR edges; see [development.md](../development.md#serial-console-on-the-native-usb-port) ("Serial console on the native USB port").
 * Windows PowerShell shell guard: scripts must not `Remove-Item "$var\file"` with an unresolved variable (blocked as a system-path delete) —
   use unique log names instead.
 
 ## Touch-test addendum (2026-10-12)
 
-While the owner exercised the touchscreen, a read-only serial listener (`tools/serial_capture.py`, started 23:53 on 2026-10-11)
+While the maintainer exercised the touchscreen, a read-only serial listener (`tools/serial_capture.py`, started 23:53 on 2026-10-11)
 recorded the session. The build on the board was **official demo + `m1_probe` sidecar** (the pristine `-DM1_PROBE=0` build was
 never touched by a finger, so it has **not** been observed under touch).
 
 **Touch input works.** 46 events (12 presses, 25 drag samples, 9 releases) over a 27 s window; reported x spans 103–414 and
 y spans 7–319 (of 0–479); drags produce smooth monotonic paths (e.g. (136,319) -> (192,131)). *Not proven:* corner coverage / axis orientation — no
-corner touches were recorded; the owner reports the rendered display looks correct (CLAUDE.md, 2026-10-12).
+corner touches were recorded; the maintainer reports the rendered display looks correct (CLAUDE.md, 2026-10-12).
 
 **The board crashed on touches in the top tab-bar band.** 4 of the 12 presses were followed within 0.1–0.25 s by a crash + automatic reboot
 (`rst:0xc RTC_SW_CPU_RST`); all 4 were in the top 16 px at x = 248–308 (the widgets demo's tab buttons). The 8 other presses — including

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Development tool: captures the synthetic-cover evidence pictures for docs/milestones/M8c (source pill, paused source, landscape
+"""Development tool: captures the synthetic-cover evidence pictures for docs/development-history/M8c (source pill, paused source, landscape
 card) from the real display, using the silent fake session next to whatever real sessions exist.
 
     tools\\venv\\Scripts\\python.exe tools\\evidence_sources.py logs\\shots\\m8c

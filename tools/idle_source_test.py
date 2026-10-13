@@ -2,7 +2,7 @@
 """Isolated end-to-end test of the idle screen as an item of the vertical source ring (ADR-008). No board needed.
 
 It starts its own companion on port 8792 that sees ONLY two silent fake media sessions - A = python.exe (the "Spotify") and B =
-deskfakeb.exe (the "YouTube") - so neither the owner's real sessions nor the real display are involved, and checks through the real
+deskfakeb.exe (the "YouTube") - so neither the user's real sessions nor the real display are involved, and checks through the real
 companion code and the real Windows media-session API:
 
   the ring is [B, A, Idle Screen]; swiping onto Idle is only a display choice (A keeps playing, no command is sent, media keys aimed

@@ -18,10 +18,10 @@ Date: 2026-10-12. Commit: `d575896`.
 
 ## Answer to the Milestone 1 touch-crash question
 
-Quick stability gate (owner request, 2026-10-12): the **pristine** Waveshare demo (no sidecar, `-DM1_PROBE=0`) was flashed and the serial log
+Quick stability gate (maintainer request, 2026-10-12): the **pristine** Waveshare demo (no sidecar, `-DM1_PROBE=0`) was flashed and the serial log
 recorded for 7 minutes (`logs/pristine-stress-1.log`, git-ignored): **no crash, no reboot** after boot. That build prints nothing on touch, so the
-log cannot show how many taps happened - the owner ran the stress test and reported no problem. Conclusion used: the
-sidecar's logging/relabelling inside LVGL-task timers on top of the demo's 7 KB stack was the likely trigger; not proven further, per the owner's
+log cannot show how many taps happened - the maintainer ran the stress test and reported no problem. Conclusion used: the
+sidecar's logging/relabelling inside LVGL-task timers on top of the demo's 7 KB stack was the likely trigger; not proven further, per the maintainer's
 instruction not to spend more time on the demo.
 
 Evidence that supports the stack theory: with a 24 KB stack the LVGL task's *minimum free* stack is ~20.2 KB, i.e. it uses ~4.3 KB at idle with this UI,
@@ -35,7 +35,7 @@ Our config keeps the safer settings regardless (large stack, one draw unit, no o
 - LVGL task stack minimum free 20,244 B of 24,576 B
 - 10 minutes (`logs/m2-soak.log`): heap numbers flat, no reset, no panic
 
-## Touch soak - status (updated: owner test on the network build, 2026-10-12)
+## Touch soak - status (updated: maintainer test on the network build, 2026-10-12)
 
 **24 physical touch presses over a 941 s run on the network build, zero resets** (`logs/mvp-soak-final.log`; counter in the health line).
 That is a first real soak of our own display config; it was not a deliberate "hammer the top band" stress test, so a longer targeted soak is still
