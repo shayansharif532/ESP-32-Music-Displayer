@@ -18,7 +18,7 @@ from desk_media_companion.framing import (FLAG_FIRST, FLAG_LAST, FLAG_SINGLE, HE
 
 H = bytes.fromhex
 
-# ---- docs/usb-protocol.md section 10 (the PONG line there carries a stray trailing "16", the frame is 16 bytes: see test_the_pong_vector) --
+# ---- docs/usb-protocol.md section 10 ------------------------------------------------------------------------------------------------------
 V_PING = H("fa de 01 30 03 00 07 00 05 00 c9 f0 68 65 6c 6c 6f c0 c9 b3 e1".replace(" ", ""))
 V_REQUEST = H("fa de 01 10 03 00 01 00 11 00 11 76 47 45 54 20 2f 6e 6f 77 2d 70 6c 61 79 69 6e 67 0a 64 50 41 b9".replace(" ", ""))
 V_RESPONSE = H("fa de 01 11 03 00 01 00 11 00 70 ce c8 00 0b 00 00 00 7b 22 6f 6b 22 3a 74 72 75 65 7d 48 39 aa 33".replace(" ", ""))
@@ -83,8 +83,8 @@ class Vectors(unittest.TestCase):
             self.assertEqual(len(feed_all(FrameParser(), one, 1)), 1)
 
     def test_the_pong_vector(self):
-        """The doc prints the PONG as 17 bytes: the final `16` is the frame length (16) pasted after the frame. The real frame is the
-        first 16 bytes, which is what the encoder produces; read literally, the stray byte is one byte of noise after a valid frame."""
+        """The PONG frame is 16 bytes (an early draft of the document printed a 17th, stray `16` = the frame length, after it; that was
+        corrected). Whatever follows a valid frame is just noise to the parser."""
         self.assertEqual(len(V_PONG), 16)
         noise = []
         p = FrameParser(on_noise=noise.append)

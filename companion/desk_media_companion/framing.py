@@ -40,7 +40,8 @@ TYPE_RESPONSE = 0x11
 TYPE_LOG = 0x20
 TYPE_PING = 0x30
 TYPE_PONG = 0x31
-KNOWN_TYPES = frozenset((TYPE_BEACON, TYPE_ACK, TYPE_REQUEST, TYPE_RESPONSE, TYPE_LOG, TYPE_PING, TYPE_PONG))
+TYPE_DEBUG = 0x7E                       # development only, companion -> display: a scripted-input action name; the product never sends it
+KNOWN_TYPES = frozenset((TYPE_BEACON, TYPE_ACK, TYPE_REQUEST, TYPE_RESPONSE, TYPE_LOG, TYPE_PING, TYPE_PONG, TYPE_DEBUG))
 
 _HEAD_NO_CRC = struct.Struct("<2sBBBBHH")        # MAGIC VER TYPE FLAGS SEQ ID LEN (10 bytes), HCRC follows
 _HEAD_FIELDS = struct.Struct("<BBBBHHH")         # VER TYPE FLAGS SEQ ID LEN HCRC, read from just after the magic
