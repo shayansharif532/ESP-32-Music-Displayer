@@ -153,6 +153,10 @@ stateDiagram-v2
     IDLE --> MEDIA_PLAYER: any session starts playing<br/>or a tap while a session exists, peek for 30 s
     MEDIA_PLAYER --> IDLE: nothing plays for the configured delay<br/>or a swipe onto the Idle source
 
+    PAIRING_LOST: PAIRING LOST<br/>status Pairing lost, GET /hello only, accepts a new pairing,<br/>probes the stored key every 20 s
+    MEDIA_PLAYER --> PAIRING_LOST: the companion refuses the key<br/>or no valid answer for 120 s
+    IDLE --> PAIRING_LOST: the companion refuses the key<br/>or no valid answer for 120 s
+    PAIRING_LOST --> CONNECTING: re-paired, or the stored key is accepted again
     MEDIA_PLAYER --> UNREACHABLE: 3 failed polls
     IDLE --> UNREACHABLE: 3 failed polls
     UNREACHABLE: UNREACHABLE<br/>status Cannot reach your PC, retry every 2 s

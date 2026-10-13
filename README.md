@@ -11,7 +11,11 @@ Platform: Windows 10 / 11 · Firmware: ESP-IDF 5.5.5, LVGL 9.5, C · Companion: 
 ## Screenshots
 
 Captured from the board's real LVGL frame buffer with the developer screenshot tool (`tools/screenshot.py`). All covers are synthetic test
-images; nothing here comes from a real music library or desktop.
+images and the two sources are silent mock sessions; nothing here comes from a real music library or desktop.
+
+<p align="center"><img src="docs/screenshots/demo.gif" alt="Demo: a music session, a vertical swipe to a video session, a swipe onto the Idle Screen item, the idle themes, and auto-follow when a session starts playing" width="360"></p>
+
+*Demo (`tools/demo_capture.py`): the player with Spotify-style shuffle / repeat, a vertical swipe to another source, one more swipe onto the Idle Screen item, the Dark and Neon idle themes, and auto-follow when a session starts playing.*
 
 | | |
 |---|---|
@@ -21,8 +25,8 @@ images; nothing here comes from a real music library or desktop.
 | *Vertical swipe switches the media source (the pill names the source); a paused source shows its own state* | *Shuffle and repeat appear only for Spotify, through the Windows-native controls (a test session stands in for Spotify here)* |
 | ![The idle screen themes](docs/screenshots/idle-themes.jpg) | ![The idle screen as a source](docs/screenshots/idle-source-carousel.jpg) |
 | *Idle screen: Minimal, Dark, Neon, a 12-hour clock, and the Photo theme in Fill / Fit / Blur Fill* | *The idle screen is one more item of the vertical source carousel; music keeps playing behind it* |
-| ![The companion's idle screen settings window](docs/screenshots/idle-settings-window.png) | |
-| *The companion's tray Settings window, with a live preview* | |
+| ![The companion's idle screen settings window](docs/screenshots/idle-settings-window.png) | ![The pairing prompt](docs/screenshots/pairing-prompt.png) |
+| *The companion's tray Settings window, with a live preview* | *Pairing: the display and the PC show the same six-digit code; confirm on both* |
 
 ## Features
 

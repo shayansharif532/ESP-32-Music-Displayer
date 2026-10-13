@@ -133,7 +133,8 @@ Performed on the full history (18 commits, every branch) before the project was 
 | Own full-history scanner (every blob version, commit message and file name: Wi-Fi names / passwords, API keys, tokens, private keys, certificates, `.env`, MAC addresses, private IPs, absolute paths, e-mail addresses) | no credential of any kind; low-severity personal context only (below) |
 | Binary / image inventory | 7 images, all synthetic; no flash dump, `.bin`, certificate or font file ever committed |
 | pip-audit (companion and tool requirements, pinned environment) | no known vulnerabilities |
-| bandit (49 findings) | none is a vulnerability: SHA-1 used as a non-security id (`usedforsecurity=False`), the deliberate `0.0.0.0` bind (now covered by authentication), test-tool `urlopen` to loopback, `try/except/pass` in cleanup paths |
+| bandit 1.9.4 | on the first (pre-pairing) tree: 3 High (SHA-1 / MD5 used as non-security ids), 15 Medium (the deliberate `0.0.0.0` bind, `urlopen` to loopback in tools), 31 Low. Now: **0 High; the production package `companion/desk_media_companion` has 0 Medium and 2 Low** (`try/except/pass` in cleanup paths); the remaining Medium findings are in development tools (`urlopen` on fixed loopback URLs, the deliberate rogue server of `tools/pairing_test.py`) |
+| gitleaks (final tree, full history, with `.gitleaks.toml`) | no leaks; the allowlist covers one published protocol test vector |
 
 Result: **no credential had to be rotated** and none was ever exposed. Low-severity personal context found in the early history (a public commit e-mail address, the development
-board's MAC address and private LAN addresses, project-brief wording) was removed from the current tree; it remains in older commits (see the maintainer notes in the release report).
+board's MAC address and private LAN addresses, project-brief wording) was removed from the current tree; it remains in older commits of the history, which has not been rewritten.
