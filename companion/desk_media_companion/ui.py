@@ -459,7 +459,7 @@ def start_tray(window: SettingsWindow, on_quit: Callable[[], None], pairing: Opt
     try:
         import pystray
     except ImportError:
-        log.warning("pystray is not installed: no tray icon (pip install pystray). Use --settings to open the settings window.")
+        log.warning("pystray is not installed: no tray icon (pip install pystray). Use --open-settings to open the settings window.")
         return None
     from . import autostart
 

@@ -6,6 +6,6 @@ useDefault = true
 # The pairing protocol publishes test vectors (docs/protocol.md, appendix) so that two independent implementations can be checked against
 # each other. The request-MAC vector looks like a generic API key to the scanner; it is a public example value, derived from a made-up
 # key, and protects nothing.
-[[allowlists]]
+[allowlist]
 description = "published protocol test vector (X-DM-Auth example)"
 regexes = ['''53a8bdfd2b22c9daef7645c4c96d3a61214f63f3811fdc4f5a04be4d1595f8c8''']

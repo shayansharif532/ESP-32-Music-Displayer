@@ -55,7 +55,7 @@ backup/           your own factory flash backup goes here (*.bin is git-ignored)
 
 ## Rules: secrets and publication
 
-* The repository is public: everything committed, and the whole history, is world-readable.
+* Treat the repository as public (it is meant to be published): everything committed, and the whole history, is world-readable.
 * Never commit Wi-Fi credentials, pairing keys, tokens, private keys, factory or flash dumps, logs, `.env` files, or personal data (names,
   addresses, e-mail, device ids, MAC addresses, home network details, absolute personal paths). Use documentation addresses (`192.168.1.50`,
   `192.0.2.x`) and placeholders in docs.
