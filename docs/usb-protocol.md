@@ -83,6 +83,7 @@ its next frame. The display never blocks its UI or poll task on the cable: its w
 | `0x20` | `LOG` | display | UTF-8 text (development builds: every log line; product builds: warnings and errors) |
 | `0x30` | `PING` | either | up to 64 bytes, answered with the same bytes in a `PONG` |
 | `0x31` | `PONG` | either | the echoed bytes |
+| `0x7E` | `DEBUG` | companion (development) | development builds only: the name of a development action (`screenshot`, `tap_play`, ...); product firmware registers no handler and ignores it |
 
 Every other TYPE is **ignored** (and counted), so a newer peer may send frames an older one does not know.
 

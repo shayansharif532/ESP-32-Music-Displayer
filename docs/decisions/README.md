@@ -14,6 +14,7 @@ consequences that were accepted. Evidence (measurements, test runs) lives in the
 | [ADR-006](ADR-006-temporary-manual-selection-and-spotify-options.md) | Manual source selection is temporary (AUTO / MANUAL_TEMP); Spotify shuffle / repeat through Windows' own session controls | Accepted (current) | 2026-10-12 |
 | [ADR-007](ADR-007-customisable-idle-screen.md) | Customisable idle screen: the PC owns the configuration, the display caches it | Accepted (current) | 2026-10-12 |
 | [ADR-008](ADR-008-idle-screen-as-source-ring-item.md) | The idle screen is a synthetic item of the vertical source ring | Accepted (current) | 2026-10-12 |
+| [ADR-009](ADR-009-usb-first-transport.md) | USB (CDC-ACM on the native port) is the primary transport; the LAN stays an optional fallback | Accepted (current) | 2026-10-13 |
 
 The pairing / authenticated-request protocol is specified in [../protocol.md](../protocol.md), its threat model in
 [../security.md](../security.md).
