@@ -112,6 +112,26 @@ bool ui_pairing_active(void);
  * held, instead of lv_screen_load_anim(): true = the prompt is up, `target` is remembered and loaded when it is dismissed. */
 bool ui_pairing_defer(lv_obj_t *target);
 
+/* ---- connection / onboarding overlay (ui_link.c) ------------------------------------------------------------------
+ * What the display says while it has no working link to the PC app: a full-screen layer on top of the player screen (the screen
+ * switching logic keeps working underneath; the layer swallows touches). A step strip shows how far the setup is (USB, Companion,
+ * Paired). The calls take the LVGL lock themselves: any task, NOT from an LVGL callback. Showing the same kind again is free. */
+typedef enum {
+    UI_LINK_NO_USB_DATA,        /* powered, but no USB data connection (charge-only cable, charger) */
+    UI_LINK_USB_CONNECTED,      /* data is there; looking for the companion (the first seconds) */
+    UI_LINK_COMPANION_MISSING,  /* the companion is not installed / not running: install QR code + address */
+    UI_LINK_PAIRING_WAIT,       /* companion found, waiting for the pairing to be opened / confirmed on the PC */
+    UI_LINK_PAIRING_LOST,       /* a stored pairing is not accepted any more: pair again */
+    UI_LINK_UPDATE_COMPANION,   /* the PC app is too old for this firmware (QR code + address) */
+    UI_LINK_UPDATE_FIRMWARE,    /* the firmware is too old for the PC app */
+} ui_link_kind_t;
+
+void ui_link_init(lv_obj_t *player_screen);      /* called by ui_init() */
+/* url = the full setup address (encoded in the QR code), url_short = how it is printed under the code; pc_name = the PC (may be NULL). */
+void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, const char *pc_name);
+void ui_link_hide(void);
+bool ui_link_visible(void);
+
 #ifdef APP_DEV_TOOLS
 /* Development only: act as if a control was tapped ("play", "next", "prev", "art"). */
 void ui_debug_tap(const char *which);

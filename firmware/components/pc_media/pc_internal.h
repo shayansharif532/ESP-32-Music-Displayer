@@ -6,16 +6,11 @@
 #include "esp_err.h"
 #include "esp_http_client.h"
 #include "lvgl.h"
+#include "usb_link.h"
 
 /* ---- pc_http.c: one persistent plain-HTTP connection to the companion, response buffer in PSRAM ---- */
 
-typedef struct {
-    char  *data;        /* NUL-terminated */
-    size_t len;
-    size_t cap;
-    size_t max;
-    bool   truncated;
-} pc_buf_t;
+typedef usb_link_buf_t pc_buf_t;       /* { char *data (NUL-terminated); size_t len, cap, max; bool truncated; }: shared with the USB link */
 
 typedef struct {
     int      status;    /* HTTP status, 0 if the request failed */
@@ -53,7 +48,14 @@ bool pc_hex_decode(const char *hex, size_t hex_len, uint8_t *out, size_t out_len
 bool pc_auth_valid_nonce(const char *s);                                             /* 32 lowercase hex characters */
 bool pc_auth_ct_equal(const void *a, const void *b, size_t n);                       /* constant time */
 
-bool pc_auth_init(void);                        /* once, before the poll task: loads the key + companion id from NVS (malformed entries are erased) */
+bool pc_auth_init(void);                        /* once, before the poll task: loads the key + companion id from NVS (malformed entries are erased), creates
+                                                 * the display id on first boot and switches the hardware RNG's entropy source on */
+bool pc_auth_dev_id(uint8_t dev[8]);            /* the display's persistent identity (BEACON, pairing) */
+void pc_auth_random(void *buf, size_t n);       /* hardware RNG (true random once pc_auth_init() has run) */
+/* USB session proof: HMAC-SHA256(K, "DMLINK-PC
+" or "DMLINK-DEV
+" || cid || dev || nd || nc); false when there is no key. */
+bool pc_link_proof(bool from_companion, const uint8_t dev[8], const uint8_t nd[16], const uint8_t nc[16], uint8_t out[32]);
 bool pc_auth_has_key(void);                     /* thread-safe */
 bool pc_auth_cid(uint8_t cid[8]);               /* the paired companion's id */
 bool pc_auth_store(const uint8_t key[32], const uint8_t cid[8]);    /* persists, then switches to the new key; false = nothing stored */

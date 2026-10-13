@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bootloader_random.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "mbedtls/ecp.h"
@@ -29,6 +30,7 @@ static const char *TAG = "pc_auth";
 #define NVS_NS      "dm_auth"
 #define NVS_KEY     "key"
 #define NVS_CID     "cid"
+#define NVS_DEV     "dev"
 
 static struct {
     uint8_t key[32];
@@ -49,7 +51,9 @@ static void wipe(void *p, size_t n)
 }
 
 /* mbedTLS wants a random-number callback for blinding the scalar multiplication. esp_fill_random is the hardware RNG, which is a
- * true random source whenever Wi-Fi is on (and pairing only ever runs with Wi-Fi up). */
+ * true random source only while the RF subsystem is on or the internal SAR-ADC entropy source is enabled. The USB-first firmware runs
+ * with Wi-Fi off, so pc_auth_init() switches the ADC source on for good (see there): without it the pairing keys would come from a
+ * pseudo-random stream. */
 static int rng_cb(void *ctx, unsigned char *buf, size_t n)
 {
     (void)ctx;
@@ -245,9 +249,57 @@ static void nvs_erase_pairing(void)
     nvs_close(h);
 }
 
+/* The display's persistent identity: 8 random bytes made once (first boot, or after the storage was erased) and kept in NVS. It is not
+ * secret and not derived from the MAC address; the USB BEACON and every pairing attempt use it, so the companion's pairing record names
+ * this display and another one can be told apart. */
+static uint8_t s_dev[8];
+static bool s_dev_valid;
+
+static void load_dev_id(void)
+{
+    s_dev_valid = false;
+    nvs_handle_t h;
+    size_t n = sizeof s_dev;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "cannot open the identity store: using a temporary display id");
+        random_bytes(s_dev, sizeof s_dev);
+        s_dev_valid = true;
+        return;
+    }
+    if (nvs_get_blob(h, NVS_DEV, s_dev, &n) != ESP_OK || n != sizeof s_dev || all_zero(s_dev, sizeof s_dev)) {
+        random_bytes(s_dev, sizeof s_dev);
+        if (all_zero(s_dev, sizeof s_dev)) {
+            s_dev[0] = 1;
+        }
+        if (nvs_set_blob(h, NVS_DEV, s_dev, sizeof s_dev) != ESP_OK || nvs_commit(h) != ESP_OK) {
+            ESP_LOGW(TAG, "storing the display id failed: it will change at the next boot");
+        } else {
+            ESP_LOGI(TAG, "new display id created");
+        }
+    }
+    nvs_close(h);
+    s_dev_valid = true;
+}
+
+bool pc_auth_dev_id(uint8_t dev[8])
+{
+    if (!s_dev_valid) {
+        return false;
+    }
+    memcpy(dev, s_dev, sizeof s_dev);
+    return true;
+}
+
+void pc_auth_random(void *buf, size_t n)
+{
+    random_bytes(buf, n);
+}
+
 bool pc_auth_init(void)
 {
     atomic_store(&s_has_key, false);
+    bootloader_random_enable();                             /* keep the SAR-ADC entropy source on: Wi-Fi may never start (docs: Random Number Generation) */
+    load_dev_id();
     nvs_handle_t h;
     esp_err_t e = nvs_open(NVS_NS, NVS_READONLY, &h);
     if (e == ESP_ERR_NVS_NOT_FOUND) {
@@ -361,6 +413,23 @@ bool pc_auth_verify_proof(const char *nonce, int status, const uint8_t body_sha2
     return pc_auth_ct_equal(want, got, sizeof want);
 }
 
+/* ---- USB session proofs (docs/usb-protocol.md section 4) ----------------------------------------------------------- */
+
+/* HMAC-SHA256(K, "DMLINK-PC\n" || cid || dev || nd || nc) from the companion, "DMLINK-DEV\n" ... from the display. Both sides bind the
+ * same four values, so the two proofs cannot be replayed into another link. */
+static bool link_proof_with(const uint8_t key[32], const uint8_t cid[8], bool from_companion, const uint8_t dev[8], const uint8_t nd[16],
+                            const uint8_t nc[16], uint8_t out[32])
+{
+    const char *label = from_companion ? "DMLINK-PC\n" : "DMLINK-DEV\n";
+    const seg_t seg[5] = { { label, strlen(label) }, { cid, 8 }, { dev, 8 }, { nd, 16 }, { nc, 16 } };
+    return hmac256(key, 32, seg, 5, out);
+}
+
+bool pc_link_proof(bool from_companion, const uint8_t dev[8], const uint8_t nd[16], const uint8_t nc[16], uint8_t out[32])
+{
+    return atomic_load(&s_has_key) && link_proof_with(s_store.key, s_store.cid, from_companion, dev, nd, nc, out);
+}
+
 /* ---- pairing --------------------------------------------------------------------------------------------- */
 
 /* transcript hash T = SHA-256("DMPAIR1" || cid || dev || pubE || pubC || nE || nC) */
@@ -388,7 +457,9 @@ static bool pair_derive_from(pc_pair_t *p, const uint8_t z[32])
 bool pc_pair_begin(pc_pair_t *p)
 {
     memset(p, 0, sizeof *p);
-    random_bytes(p->dev, sizeof p->dev);
+    if (!pc_auth_dev_id(p->dev)) {                          /* the persistent display id (BEACON and pairing use the same one) */
+        random_bytes(p->dev, sizeof p->dev);
+    }
     random_bytes(p->priv, sizeof p->priv);
     random_bytes(p->ne, sizeof p->ne);
     if (!x25519(p->pub_e, p->priv, NULL)) {
@@ -600,6 +671,19 @@ bool pc_auth_selftest(void)
         }
         pc_hex_encode(mac, 32, hex);
         check_hex("X-DM-Proof", hex, "3ec39b8f361d53cf98d7f1df2384653ebe137c037ae8b95844b7b16c6c5f26d2");
+
+        /* the USB session proofs (docs/usb-protocol.md section 10), same K, cid 0102..08, dev 11.., nd cc.., nc dd.. */
+        uint8_t nd[16], ncs[16], lp[32];
+        memset(nd, 0xcc, sizeof nd);
+        memset(ncs, 0xdd, sizeof ncs);
+        if (!link_proof_with(p.k, cid, true, p.dev, nd, ncs, lp)) {
+            s_fail++;
+        }
+        check("link proof (companion)", lp, "6eb2d91074d29d26f2c752fd75c9577e41516d44a7acbb5ad032686d09cb56dd");
+        if (!link_proof_with(p.k, cid, false, p.dev, nd, ncs, lp)) {
+            s_fail++;
+        }
+        check("link proof (display)", lp, "b9e783272a2baef27e9f868e45a9c64d8728c37b081aecb5cc3f7c0c92006c89");
     }
     pc_pair_wipe(&p);
     wipe(c_priv, sizeof c_priv);

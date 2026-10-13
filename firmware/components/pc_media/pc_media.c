@@ -1,6 +1,11 @@
 /*
- * pc_media: discovery of the Windows companion, pairing with it, polling of /now-playing, artwork download, control commands.
- * Never touches LVGL - results go out through the callbacks in pc_media_config_t.
+ * pc_media: finding the Windows companion (USB cable first, the local network as an optional fallback), pairing with it, polling of
+ * /now-playing, artwork download, control commands. Never touches LVGL - results go out through the callbacks in pc_media_config_t.
+ *
+ * Transports. Every exchange goes through xfer(): over USB it is a DMLINK request (usb_link), over the LAN an HTTP request (pc_http).
+ * USB is used whenever a companion answers on the cable; otherwise the LAN, when Wi-Fi is configured and a companion was found. The
+ * routes, the JSON and the pairing handshake are identical; only the proof of identity differs: a USB link opens one session with the
+ * key (usb_session_open), a LAN request is signed one by one (pc_http.c).
  *
  * Pairing (docs/protocol.md sections 2 and 3). The poll task is in one of three states:
  *   UNPAIRED  no key stored: only GET /hello is polled (every 2 s); when the companion has its pairing window open the handshake runs;
@@ -21,8 +26,10 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
+#include "esp_app_desc.h"
 #include "pc_internal.h"
 #include "pc_media.h"
+#include "usb_link.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "pc_media";
@@ -49,15 +56,29 @@ static const char *TAG = "pc_media";
 #define AUTH_FAILS_LOST     3                   /* paired: this many auth failures in a row (401 / no valid proof): same */
 #define PROBE_MS            20000               /* lost: how often a signed request tries whether the old key still works */
 #define BLOCKED_MS          30000               /* the companion answered 429 (this address is blocked for up to 60 s): stay quiet this long */
+#define USB_GRACE_MS        6000                /* after power-up: this long without USB data is normal (the PC is still enumerating us) */
+#define USB_ANSWER_MS       5000                /* USB data for this long without a companion answering: it is not installed / not running */
+#define USB_TIMEOUT_MS      3000
+#define COMPANION_GONE_MS   60000           /* a companion that was there and is silent for this long is "not running", not "restarting" */
 
 typedef struct {
     pc_media_cmd_t cmd;
     uint32_t arg;
 } cmd_msg_t;
 
+typedef enum { X_NONE, X_USB, X_LAN } xport_t;
+
 static struct {
     pc_media_callbacks_t cbs;
     QueueHandle_t q;
+    bool lan_enabled;                   /* Wi-Fi is configured: the LAN fallback exists */
+    xport_t xport;                      /* the transport in use right now (poll task) */
+    int64_t boot_ms, usb_since_ms;      /* start-up time; when USB data first appeared (continuously) */
+    int64_t usb_seen_ms;                /* the last time there was USB data */
+    int64_t companion_seen_ms;          /* the last time a companion answered on USB (0 = never since boot) */
+    bool session_ok;                    /* USB: the key was proved on this link */
+    uint32_t session_epoch;             /* usb_link_epoch() when it was proved: a changed epoch = the companion restarted */
+    pc_auth_result_t usb_last;          /* what the last USB exchange learned about authentication (the LAN keeps its own in pc_http.c) */
     SemaphoreHandle_t lock;             /* guards host / port / host_valid */
     char host[16];
     uint16_t port;
@@ -161,17 +182,12 @@ static bool jbool(const cJSON *obj, const char *key)
     return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj, key));
 }
 
-static bool get_host(char *host, size_t n, uint16_t *port)
+static void wipe_buf(void *p, size_t n)
 {
-    bool ok;
-    xSemaphoreTake(s.lock, portMAX_DELAY);
-    ok = s.host_valid;
-    if (ok) {
-        strlcpy(host, s.host, n);
-        *port = s.port;
+    volatile uint8_t *b = p;
+    while (n--) {
+        *b++ = 0;
     }
-    xSemaphoreGive(s.lock);
-    return ok;
 }
 
 /* ---- pairing state --------------------------------------------------------------------------------- */
@@ -204,20 +220,174 @@ static void enter_lost(const char *why)
     ESP_LOGW(TAG, "pairing lost: %s", why);
 }
 
+static pc_auth_result_t last_auth(void)
+{
+    return s.xport == X_USB ? s.usb_last : pc_http_last_auth();
+}
+
 /* A 429 means the companion's failure limiter has blocked this address: stop talking for a while instead of hammering it. */
 static void note_limited(void)
 {
-    if (pc_http_last_auth() == PC_AUTH_LIMITED) {
+    if (last_auth() == PC_AUTH_LIMITED) {
         s.blocked_until = now_ms() + BLOCKED_MS;
         ESP_LOGW(TAG, "the companion is limiting this display (HTTP 429): backing off");
     }
 }
 
-/* Every request to the companion goes through here: besides sending it, it keeps the authentication bookkeeping. */
-static esp_err_t req(const char *host, uint16_t port, const char *path_query, bool post, int timeout_ms, pc_resp_t *resp)
+/* ---- the two transports ---------------------------------------------------------------------------------------------------- */
+
+static bool route_is_open(const char *pq)               /* the routes that need no proof of identity (docs/protocol.md section 2) */
 {
-    esp_err_t err = pc_http_request(host, port, path_query, post, timeout_ms, resp);
-    switch (pc_http_last_auth()) {
+    const size_t n = strcspn(pq, "?");
+    return (n == 6 && strncmp(pq, "/hello", 6) == 0) || (n == 7 && strncmp(pq, "/health", 7) == 0) || strncmp(pq, "/pair/", 6) == 0 ||
+           strncmp(pq, "/link/", 6) == 0;
+}
+
+static bool lan_host(char *host, size_t n, uint16_t *port)
+{
+    bool ok;
+    xSemaphoreTake(s.lock, portMAX_DELAY);
+    ok = s.host_valid;
+    if (ok) {
+        strlcpy(host, s.host, n);
+        *port = s.port;
+    }
+    xSemaphoreGive(s.lock);
+    return ok;
+}
+
+/* One unauthenticated-or-session exchange over USB; status and body land in resp like an HTTP answer. */
+static esp_err_t usb_call(const char *path_query, bool post, const char *json, int timeout_ms, pc_resp_t *resp)
+{
+    int status = 0;
+    esp_err_t err = usb_link_request(post ? "POST" : "GET", path_query, json, timeout_ms, &resp->body, &status);
+    resp->status = err == ESP_OK ? status : 0;
+    return err;
+}
+
+/* The key is proved once per link (docs/usb-protocol.md section 4): two exchanges, both sides bind both nonces. */
+static esp_err_t usb_session_open(int timeout_ms)
+{
+    uint8_t dev[8], cid[8], nd[16], nc[16], want[32], got[32];
+    char body[160], dev_hex[17], nd_hex[33];
+    if (!pc_auth_has_key() || !pc_auth_cid(cid) || !pc_auth_dev_id(dev)) {
+        s.usb_last = PC_AUTH_NO_KEY;
+        return ESP_ERR_INVALID_STATE;
+    }
+    pc_auth_random(nd, sizeof nd);
+    pc_hex_encode(dev, sizeof dev, dev_hex);
+    pc_hex_encode(nd, sizeof nd, nd_hex);
+    snprintf(body, sizeof body, "{\"dev\":\"%s\",\"nd\":\"%s\"}", dev_hex, nd_hex);
+    pc_resp_t r;
+    pc_resp_init(&r, 1024);
+    esp_err_t err = usb_call("/link/open", true, body, timeout_ms, &r);
+    cJSON *j = (err == ESP_OK && r.status == 200 && r.body.data) ? cJSON_ParseWithLength(r.body.data, r.body.len) : NULL;
+    if (err == ESP_OK && r.status == 401) {
+        s.usb_last = (r.body.data && strstr(r.body.data, "\"unpaired\"")) ? PC_AUTH_UNPAIRED : PC_AUTH_FAILED;
+        err = ESP_ERR_INVALID_RESPONSE;
+    } else if (err == ESP_OK && r.status == 429) {
+        s.usb_last = PC_AUTH_LIMITED;
+        err = ESP_ERR_INVALID_RESPONSE;
+    } else if (err == ESP_OK) {
+        const cJSON *nc_v = j ? cJSON_GetObjectItemCaseSensitive(j, "nc") : NULL, *pr_v = j ? cJSON_GetObjectItemCaseSensitive(j, "proof") : NULL;
+        const bool fields = jbool(j, "ok") && cJSON_IsString(nc_v) && cJSON_IsString(pr_v) &&
+                            pc_hex_decode(nc_v->valuestring, strlen(nc_v->valuestring), nc, sizeof nc) &&
+                            pc_hex_decode(pr_v->valuestring, strlen(pr_v->valuestring), got, sizeof got);
+        if (!fields || !pc_link_proof(true, dev, nd, nc, want) || !pc_auth_ct_equal(want, got, sizeof want)) {
+            ESP_LOGW(TAG, "USB session: the companion's proof is missing or wrong");
+            s.usb_last = PC_AUTH_BAD_PROOF;
+            err = ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+    cJSON_Delete(j);
+    pc_resp_free(&r);
+    if (err != ESP_OK) {
+        return err;
+    }
+    uint8_t mine[32];
+    char proof_hex[65];
+    if (!pc_link_proof(false, dev, nd, nc, mine)) {
+        return ESP_FAIL;
+    }
+    pc_hex_encode(mine, sizeof mine, proof_hex);
+    snprintf(body, sizeof body, "{\"dev\":\"%s\",\"proof\":\"%s\"}", dev_hex, proof_hex);
+    pc_resp_init(&r, 1024);
+    err = usb_call("/link/auth", true, body, timeout_ms, &r);
+    if (err == ESP_OK && r.status == 200) {
+        s.session_ok = true;
+        s.session_epoch = usb_link_epoch();
+    } else if (err == ESP_OK) {
+        s.usb_last = r.status == 429 ? PC_AUTH_LIMITED : PC_AUTH_FAILED;
+        err = ESP_ERR_INVALID_RESPONSE;
+    }
+    wipe_buf(proof_hex, sizeof proof_hex);
+    pc_resp_free(&r);
+    return err;
+}
+
+/* An exchange over the transport in use. Authenticated routes need the key (USB: a session; LAN: signed by pc_http.c); the open
+ * routes (hello, health, the pairing and session routes) need nothing. `json` = POST body (only the pairing and session routes take one). */
+static esp_err_t xfer(const char *path_query, bool post, const char *json, int timeout_ms, pc_resp_t *resp)
+{
+    if (s.xport == X_USB) {
+        s.usb_last = PC_AUTH_NONE;
+        const bool open = route_is_open(path_query);
+        if (!open) {
+            if (!pc_auth_has_key()) {
+                s.usb_last = PC_AUTH_NO_KEY;
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (s.session_ok && s.session_epoch != usb_link_epoch()) {
+                s.session_ok = false;                               /* the companion restarted: its session is gone */
+            }
+        }
+        for (int attempt = 0; attempt < 2; attempt++) {
+            if (!open && !s.session_ok) {
+                esp_err_t e = usb_session_open(timeout_ms);
+                if (e != ESP_OK) {
+                    return e;
+                }
+            }
+            esp_err_t err = usb_call(path_query, post, json, timeout_ms, resp);
+            if (err != ESP_OK || open) {
+                if (err == ESP_OK && resp->status == 429) {
+                    s.usb_last = PC_AUTH_LIMITED;
+                }
+                return err;
+            }
+            if (resp->status == 401) {
+                const bool unpaired = resp->body.data && strstr(resp->body.data, "\"unpaired\"") != NULL;
+                s.session_ok = false;
+                s.usb_last = unpaired ? PC_AUTH_UNPAIRED : PC_AUTH_FAILED;
+                if (!unpaired && attempt == 0) {
+                    continue;                                       /* the session was lost (companion restarted): open a new one, once */
+                }
+                return ESP_OK;
+            }
+            if (resp->status == 429) {
+                s.usb_last = PC_AUTH_LIMITED;
+            } else if (resp->status == 426) {
+                s.usb_last = PC_AUTH_FAILED;                        /* "update needed": the status line explains it (see select_transport) */
+            } else {
+                s.usb_last = PC_AUTH_OK;
+            }
+            return ESP_OK;
+        }
+        return ESP_FAIL;
+    }
+    char host[16];
+    uint16_t port;
+    if (s.xport != X_LAN || !lan_host(host, sizeof host, &port)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return json ? pc_http_post_json(host, port, path_query, json, timeout_ms, resp) : pc_http_request(host, port, path_query, post, timeout_ms, resp);
+}
+
+/* Every authenticated request to the companion goes through here: besides sending it, it keeps the authentication bookkeeping. */
+static esp_err_t req(const char *path_query, bool post, int timeout_ms, pc_resp_t *resp)
+{
+    esp_err_t err = xfer(path_query, post, NULL, timeout_ms, resp);
+    switch (last_auth()) {
     case PC_AUTH_OK:
         s.auth_fails = 0;
         s.last_valid_ms = now_ms();
@@ -394,16 +564,11 @@ static void update_art(void)
         }
         return;
     }
-    char host[16];
-    uint16_t port;
-    if (!get_host(host, sizeof host, &port)) {
-        return;
-    }
     int64_t t0 = esp_timer_get_time();
     const lv_image_dsc_t *dsc = NULL, *bg = NULL;
     char path[56];
     snprintf(path, sizeof path, "/artwork?size=%u&maxw=%u", (unsigned)s.art_max_h, (unsigned)s.art_max_w);
-    esp_err_t err = req(host, port, path, false, 6000, &s.art);
+    esp_err_t err = req(path, false, 6000, &s.art);
     if (err == ESP_OK && s.art.status == 200 && s.art.body.len > 100 && !s.art.body.truncated) {
         err = pc_art_decode((const uint8_t *)s.art.body.data, s.art.body.len, &dsc, &bg);
     } else {
@@ -442,20 +607,15 @@ static void idle_sync(uint32_t remote_v)
     if (now < s.idle_retry_at) {
         return;
     }
-    char host[16];
-    uint16_t port;
-    if (!get_host(host, sizeof host, &port)) {
-        return;
-    }
     bool ok = false;
-    esp_err_t err = req(host, port, "/idle", false, 4000, &s.resp);
+    esp_err_t err = req("/idle", false, 4000, &s.resp);
     if (err == ESP_OK && s.resp.status == 200 && s.resp.body.data && !s.resp.body.truncated) {
         int need = s.cbs.idle_config(s.resp.body.data, s.resp.body.len, s.cbs.ctx);
         if (need == 0) {
             ok = true;
         } else if (need == 1 && s.cbs.idle_picture) {
             pc_resp_init(&s.idle_img, IDLE_IMG_MAX_BYTES);
-            err = req(host, port, "/idle/image", false, 10000, &s.idle_img);
+            err = req("/idle/image", false, 10000, &s.idle_img);
             if (err == ESP_OK && s.idle_img.status == 200 && !s.idle_img.body.truncated && s.idle_img.body.len > 100) {
                 ok = s.cbs.idle_picture((const uint8_t *)s.idle_img.body.data, s.idle_img.body.len, s.cbs.ctx);
             } else {
@@ -529,12 +689,7 @@ static void apply_state(const pc_media_state_t *ns)
 
 static bool poll_once(void)
 {
-    char host[16];
-    uint16_t port;
-    if (!get_host(host, sizeof host, &port)) {
-        return false;
-    }
-    esp_err_t err = req(host, port, "/now-playing", false, HTTP_TIMEOUT_MS, &s.resp);
+    esp_err_t err = req("/now-playing", false, HTTP_TIMEOUT_MS, &s.resp);
     cJSON *root = NULL;
     if (err == ESP_OK && s.resp.status == 200 && s.resp.body.data) {
         root = cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len);
@@ -545,7 +700,7 @@ static bool poll_once(void)
         }
         s.failures++;
         if (s.failures >= FAILS_BEFORE_LOST) {
-            const bool refused = pc_http_last_auth() == PC_AUTH_BAD_PROOF || (err == ESP_OK && s.resp.status);
+            const bool refused = last_auth() == PC_AUTH_BAD_PROOF || (err == ESP_OK && s.resp.status);
             emit_status(PC_MEDIA_UNREACHABLE, refused ? "PC refused the request" : "PC not answering");
         }
         return false;
@@ -632,9 +787,8 @@ static void apply_transport_answer(const char *path)
 
 static void do_command(const cmd_msg_t *m)
 {
-    char host[16], path[224];
-    uint16_t port;
-    if (!get_host(host, sizeof host, &port)) {
+    char path[224];
+    if (s.xport == X_NONE) {
         return;
     }
     /* Every command names the app the display is showing, so it goes to exactly that session even if the PC's own idea of the
@@ -695,7 +849,7 @@ static void do_command(const cmd_msg_t *m)
     const bool is_volume = (m->cmd == PC_MEDIA_CMD_VOLUME_UP || m->cmd == PC_MEDIA_CMD_VOLUME_DOWN);
     const bool is_source = (m->cmd == PC_MEDIA_CMD_SOURCE_NEXT || m->cmd == PC_MEDIA_CMD_SOURCE_PREV);
     const bool is_transport = (m->cmd == PC_MEDIA_CMD_SHUFFLE || m->cmd == PC_MEDIA_CMD_REPEAT || m->cmd == PC_MEDIA_CMD_SOURCE_AUTO);   /* answer carries a fresh "now" */
-    esp_err_t err = req(host, port, path, true, HTTP_TIMEOUT_MS, &s.resp);
+    esp_err_t err = req(path, true, HTTP_TIMEOUT_MS, &s.resp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "command %s failed: %s", path, esp_err_to_name(err));
         if (is_volume && s.cbs.on_volume) {
@@ -738,6 +892,12 @@ static int64_t now_ms(void)
 
 #define PAIR_HTTP_MS        3000
 
+/* Is the transport in use still there? (A pairing attempt ends when it vanishes.) */
+static bool link_ok(void)
+{
+    return s.xport == X_USB ? usb_link_state() == USB_LINK_COMPANION : (s.xport == X_LAN && wifi_mgr_is_connected());
+}
+
 typedef struct {
     bool paired, pairing;
     uint8_t id[8];
@@ -760,9 +920,9 @@ static void check_debug(const cJSON *j)
 #endif
 
 /* GET /hello (unauthenticated): who answers, and is its pairing window open. */
-static bool fetch_hello(const char *host, uint16_t port, hello_t *h)
+static bool fetch_hello(hello_t *h)
 {
-    esp_err_t err = pc_http_request(host, port, "/hello", false, HELLO_TIMEOUT_MS, &s.resp);
+    esp_err_t err = xfer("/hello", false, NULL, HELLO_TIMEOUT_MS, &s.resp);
     note_limited();
     cJSON *j = (err == ESP_OK && s.resp.status == 200 && s.resp.body.data && !s.resp.body.truncated)
                    ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
@@ -784,10 +944,9 @@ static bool fetch_hello(const char *host, uint16_t port, hello_t *h)
 }
 
 /* One pairing call: the parsed answer when it is HTTP 200 with "ok":true (caller frees), else NULL. */
-static cJSON *pair_call(const char *host, uint16_t port, const char *label, const char *path, const char *json_body)
+static cJSON *pair_call(const char *label, const char *path, const char *json_body)
 {
-    esp_err_t err = json_body ? pc_http_post_json(host, port, path, json_body, PAIR_HTTP_MS, &s.resp)
-                              : pc_http_request(host, port, path, false, PAIR_HTTP_MS, &s.resp);
+    esp_err_t err = xfer(path, json_body != NULL, json_body, PAIR_HTTP_MS, &s.resp);
     note_limited();
     cJSON *j = (err == ESP_OK && s.resp.body.data && !s.resp.body.truncated) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
     if (err == ESP_OK && s.resp.status == 200 && j && jbool(j, "ok")) {
@@ -806,11 +965,11 @@ static cJSON *pair_call(const char *host, uint16_t port, const char *label, cons
 typedef enum { PS_UNKNOWN, PS_PENDING, PS_PAIRED, PS_ENDED } pair_state_t;
 
 /* GET /pair/status?dev=...: UNKNOWN = no usable answer, ENDED = cancelled / expired (or "paired" without a usable proof). */
-static pair_state_t pair_status(const char *host, uint16_t port, const char *dev_hex, uint8_t proof[32])
+static pair_state_t pair_status(const char *dev_hex, uint8_t proof[32])
 {
     char path[48];
     snprintf(path, sizeof path, "/pair/status?dev=%s", dev_hex);
-    cJSON *j = pair_call(host, port, "status", path, NULL);
+    cJSON *j = pair_call("status", path, NULL);
     if (!j) {
         return PS_UNKNOWN;
     }
@@ -829,7 +988,7 @@ static pair_state_t pair_status(const char *host, uint16_t port, const char *dev
 
 /* One pairing attempt (protocol section 3). true = the key was verified and stored. Every other outcome (the user's Cancel, a
  * timeout, any error) hides the prompt, tells the PC (best effort), stores nothing and starts the 10 s pause before a new offer. */
-static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
+static bool pair_attempt(const hello_t *hello)
 {
     pc_pair_t *p = &s.pair;
     char dev[17], body[256], name[NAME_BYTES], pc_name[NAME_BYTES];
@@ -850,7 +1009,7 @@ static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
 
     /* 1. offer: our public key and the commitment to our nonce */
     n = pc_pair_offer_json(p, body, sizeof body);
-    j = n > 0 ? pair_call(host, port, "offer", "/pair/offer", body) : NULL;
+    j = n > 0 ? pair_call("offer", "/pair/offer", body) : NULL;
     if (!j) {
         goto done;
     }
@@ -870,7 +1029,7 @@ static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
 
     /* 2. reveal our nonce (the PC checks it against the commitment), then both sides derive the same code */
     n = pc_pair_reveal_json(p, body, sizeof body);
-    j = n > 0 ? pair_call(host, port, "reveal", "/pair/reveal", body) : NULL;
+    j = n > 0 ? pair_call("reveal", "/pair/reveal", body) : NULL;
     if (!j) {
         goto done;
     }
@@ -892,13 +1051,13 @@ static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
     miss = 0;
     while ((answer = atomic_load(&s.pair_answer)) == 0) {
         const int64_t t = now_ms();
-        if (t >= deadline || !wifi_mgr_is_connected()) {
+        if (t >= deadline || !link_ok()) {
             ESP_LOGI(TAG, "pairing: no answer in time");
             goto done;
         }
         if (t >= next_status) {                         /* is the attempt still alive on the PC (not cancelled / expired there)? */
             next_status = t + PAIR_STATUS_MS;
-            const pair_state_t st = pair_status(host, port, dev, proof);
+            const pair_state_t st = pair_status(dev, proof);
             if (st == PS_ENDED || (st == PS_UNKNOWN && ++miss >= 3)) {
                 ESP_LOGI(TAG, "pairing: the attempt ended on the PC");
                 goto done;
@@ -918,7 +1077,7 @@ static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
 
     /* 4. confirm with our proof, then wait for the click on the PC and its proof */
     n = pc_pair_confirm_json(p, body, sizeof body);
-    j = n > 0 ? pair_call(host, port, "confirm", "/pair/confirm", body) : NULL;
+    j = n > 0 ? pair_call("confirm", "/pair/confirm", body) : NULL;
     if (!j) {
         goto done;
     }
@@ -926,11 +1085,11 @@ static bool pair_attempt(const char *host, uint16_t port, const hello_t *hello)
     deadline = now_ms() + PAIR_PC_MS;
     miss = 0;
     for (;;) {
-        const pair_state_t st = pair_status(host, port, dev, proof);
+        const pair_state_t st = pair_status(dev, proof);
         if (st == PS_PAIRED) {
             break;
         }
-        if (st == PS_ENDED || (st == PS_UNKNOWN && ++miss >= 5) || now_ms() >= deadline || !wifi_mgr_is_connected() ||
+        if (st == PS_ENDED || (st == PS_UNKNOWN && ++miss >= 5) || now_ms() >= deadline || !link_ok() ||
             atomic_load(&s.pair_answer) == 2) {         /* (the user may still tap Cancel while the PC has not been clicked) */
             ESP_LOGI(TAG, "pairing: not completed");
             goto done;
@@ -954,7 +1113,7 @@ done:
     }
     if (!ok && offered) {
         n = pc_pair_cancel_json(p, body, sizeof body);
-        j = n > 0 ? pair_call(host, port, "cancel", "/pair/cancel", body) : NULL;
+        j = n > 0 ? pair_call("cancel", "/pair/cancel", body) : NULL;
         cJSON_Delete(j);
     }
     pc_pair_wipe(p);
@@ -977,7 +1136,7 @@ done:
 
 /* Unpaired or lost: ask GET /hello every 2 s (never /now-playing), show what is wrong, and start the handshake when the companion's
  * pairing window is open. While lost, a signed request is tried now and then so a PC that was merely asleep is picked up again. */
-static void unpaired_cycle(const char *host, uint16_t port, int64_t *next_poll)
+static void unpaired_cycle(int64_t *next_poll)
 {
     drain_commands();
     int64_t now = now_ms();
@@ -988,7 +1147,7 @@ static void unpaired_cycle(const char *host, uint16_t port, int64_t *next_poll)
     }
     *next_poll = now + HELLO_MS;
     hello_t h;
-    if (!fetch_hello(host, port, &h)) {
+    if (!fetch_hello(&h)) {
         s.failures++;
         if (s.failures >= FAILS_BEFORE_LOST) {
             emit_status(PC_MEDIA_UNREACHABLE, "PC not answering");
@@ -1002,8 +1161,8 @@ static void unpaired_cycle(const char *host, uint16_t port, int64_t *next_poll)
 
     const bool has_key = pc_auth_has_key();
     if (has_key && h.paired && now >= s.probe_at) {      /* lost, but it knows a paired display: is it still us? */
-        req(host, port, "/sources", false, 2500, &s.resp);
-        if (pc_http_last_auth() == PC_AUTH_OK) {
+        req("/sources", false, 2500, &s.resp);
+        if (last_auth() == PC_AUTH_OK) {
             set_lost(false);
             s.auth_fails = 0;
             ESP_LOGI(TAG, "pairing restored: the companion accepts the stored key again");
@@ -1013,11 +1172,83 @@ static void unpaired_cycle(const char *host, uint16_t port, int64_t *next_poll)
     }
     emit_status(has_key ? PC_MEDIA_PAIRING_LOST : PC_MEDIA_NEEDS_PAIRING, h.name);
     if (h.pairing && s.cbs.on_pair_prompt && now_ms() >= s.pair_retry_at) {
-        *next_poll = pair_attempt(host, port, &h) ? 0 : now_ms() + HELLO_MS;
+        *next_poll = pair_attempt(&h) ? 0 : now_ms() + HELLO_MS;
     }
 }
 
 /* ---- the poll task --------------------------------------------------------------------------------- */
+
+/* Which transport to use now, and what to tell the user when there is none. Runs at the top of every poll cycle. USB wins whenever a
+ * companion answers on the cable; otherwise the LAN, when Wi-Fi is configured and a companion was found there. */
+static void select_transport(void)
+{
+    const int64_t now = now_ms();
+    const usb_link_state_t us = usb_link_state();
+    if (us == USB_LINK_NO_HOST) {
+        s.usb_since_ms = 0;
+    } else {
+        s.usb_seen_ms = now;
+        if (s.usb_since_ms == 0) {
+            s.usb_since_ms = now;
+        }
+        if (us == USB_LINK_COMPANION) {
+            s.companion_seen_ms = now;
+        }
+    }
+    xport_t want = X_NONE;
+    if (us == USB_LINK_COMPANION) {
+        usb_link_peer_t peer;
+        if (usb_link_peer(&peer) && !peer.compat) {
+            emit_status(PC_MEDIA_INCOMPATIBLE, peer.api < USB_LINK_MIN_API ? "companion" : "firmware");
+        } else {
+            want = X_USB;
+        }
+    } else if (s.lan_enabled && wifi_mgr_is_connected() && s.host_valid) {
+        want = X_LAN;
+    }
+    if (want != s.xport) {
+        ESP_LOGI(TAG, "transport: %s", want == X_USB ? "USB" : want == X_LAN ? "LAN" : "none");
+        s.xport = want;
+        s.failures = 0;
+        s.auth_fails = 0;
+        s.session_ok = false;
+        s.last_valid_ms = now;                           /* the "no valid answer for 120 s" clock only runs while a companion is being asked */
+        pc_http_drop();
+    }
+    if (want != X_NONE || (us == USB_LINK_COMPANION)) {
+        return;
+    }
+    /* nothing to talk to: say why */
+    const int64_t quiet_since = s.usb_seen_ms > s.boot_ms ? s.usb_seen_ms : s.boot_ms;
+    if (us == USB_LINK_NO_COMPANION) {
+        const bool restarting = s.companion_seen_ms != 0 && now - s.companion_seen_ms < COMPANION_GONE_MS;
+        if (now - s.usb_since_ms < USB_ANSWER_MS || restarting) {
+            emit_status(PC_MEDIA_USB_CONNECTED, "");         /* the first seconds, or the companion is restarting: not the install screen */
+        } else if (!s.lan_enabled || !wifi_mgr_is_connected()) {
+            emit_status(PC_MEDIA_COMPANION_MISSING, "");
+        } else {
+            emit_status(PC_MEDIA_SEARCHING, "");
+        }
+    } else if (s.lan_enabled) {
+        if (!wifi_mgr_is_connected()) {
+            emit_status(now - quiet_since < USB_GRACE_MS ? PC_MEDIA_WAITING_NETWORK : PC_MEDIA_NO_USB_DATA, "");
+        } else {
+            emit_status(PC_MEDIA_SEARCHING, "");
+        }
+    } else if (now - quiet_since >= USB_GRACE_MS) {
+        emit_status(PC_MEDIA_NO_USB_DATA, "");              /* a cable that was just bumped does not flash this: it needs 6 s of silence */
+    }
+}
+
+#ifdef APP_DEV_TOOLS
+static void usb_debug(const char *action, void *ctx)      /* a DEBUG frame from the host (development action): same hook the /debug route uses */
+{
+    (void)ctx;
+    if (s.cbs.on_debug) {
+        s.cbs.on_debug(action, s.cbs.ctx);
+    }
+}
+#endif
 
 static void poll_task(void *arg)
 {
@@ -1027,18 +1258,10 @@ static void poll_task(void *arg)
 #endif
     int64_t next_poll = 0;                              /* when the next /now-playing poll is due */
     for (;;) {
-        if (!wifi_mgr_is_connected()) {
-            emit_status(PC_MEDIA_WAITING_NETWORK, "");
+        select_transport();
+        if (s.xport == X_NONE) {
             drain_commands();
-            wifi_mgr_wait_connected(1000);
-            continue;
-        }
-        char host[16];
-        uint16_t port;
-        if (!get_host(host, sizeof host, &port)) {
-            emit_status(PC_MEDIA_SEARCHING, "");
-            drain_commands();
-            vTaskDelay(pdMS_TO_TICKS(300));
+            vTaskDelay(pdMS_TO_TICKS(250));
             continue;
         }
         if (now_ms() < s.blocked_until) {               /* limited by the companion (429): wait it out quietly */
@@ -1047,7 +1270,7 @@ static void poll_task(void *arg)
             continue;
         }
         if (!pc_auth_has_key() || is_lost()) {
-            unpaired_cycle(host, port, &next_poll);
+            unpaired_cycle(&next_poll);
             continue;
         }
         int64_t now = now_ms();
@@ -1085,7 +1308,21 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     if (!s.lock || !s.q || !s.answer_sem) {
         return ESP_ERR_NO_MEM;
     }
-    pc_auth_init();                                     /* the stored pairing key (if any) is read once, here */
+    pc_auth_init();                                     /* the stored pairing key (if any) is read once, here; the display id exists after this */
+    s.lan_enabled = cfg->lan_enabled;
+    s.boot_ms = now_ms();
+    {
+        usb_link_config_t uc = { .fw_version = esp_app_get_description()->version, .is_paired = pc_media_is_paired };
+        pc_auth_dev_id(uc.dev_id);
+        esp_err_t ue = usb_link_start(&uc);
+        if (ue != ESP_OK) {
+            ESP_LOGE(TAG, "USB link could not start: %s", esp_err_to_name(ue));
+        }
+        usb_link_log_install();                         /* the firmware log goes to the companion as well (it keeps a log file for support) */
+#ifdef APP_DEV_TOOLS
+        usb_link_set_debug_handler(usb_debug, NULL);
+#endif
+    }
     uint8_t cid[8];
     if (pc_auth_cid(cid)) {
         memcpy(s.cid, cid, sizeof s.cid);
@@ -1098,14 +1335,14 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     s.art_max_h = cfg->art_max_h ? cfg->art_max_h : 300;
     s.art_max_w = cfg->art_max_w ? cfg->art_max_w : s.art_max_h;
     pc_art_set_cover_area_fn(cfg->cover_area);
-    if (cfg->static_host && cfg->static_host[0]) {
+    if (cfg->lan_enabled && cfg->static_host && cfg->static_host[0]) {
         strlcpy(s.host, cfg->static_host, sizeof s.host);
         s.host_valid = true;
         s.host_static = true;
         ESP_LOGI(TAG, "using fixed companion address %s:%u", s.host, (unsigned)s.port);
     }
     s.started = true;
-    if (!s.host_static) {
+    if (cfg->lan_enabled && !s.host_static) {
         xTaskCreatePinnedToCore(discovery_task, "pc_discovery", 4096, NULL, 3, NULL, 0);
     }
     if (xTaskCreatePinnedToCore(poll_task, "pc_poll", 12288, NULL, 3, NULL, 0) != pdPASS) {
