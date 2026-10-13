@@ -29,7 +29,7 @@ from winrt.windows.media.playback import MediaPlayer
 from winrt.windows.storage.streams import DataWriter, InMemoryRandomAccessStream, RandomAccessStreamReference
 
 TRACKS = [
-    ("Midnight City Lights", "The Neon Drivers", "Night Shift", 214, (120, 40, 200), (1, 1)),
+    ("Harbor Lights", "Example Band", "Late Shift", 214, (120, 40, 200), (1, 1)),
     ("A Very Long Track Title That Has To Scroll Across The Screen Several Times", "Artist With A Long Name feat. Someone", "Long Names", 187, (230, 120, 20), (1, 1)),
     ("Wide 16:9 thumbnail test (like a YouTube video)", "Some Channel", "YouTube", 95, (20, 140, 200), (16, 9)),
 ]

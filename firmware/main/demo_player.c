@@ -24,7 +24,7 @@ static const struct {
     const char *title, *artist;
     uint32_t duration_ms;
 } TRACKS[] = {
-    { "Midnight City Lights", "The Neon Drivers", 214000 },
+    { "Harbor Lights", "Example Band", 214000 },
     { "A Very Long Track Title That Has To Scroll Across The Screen", "An Artist With A Long Name feat. Someone Else", 187000 },
     { "Short", "Solo", 95000 },
 };
