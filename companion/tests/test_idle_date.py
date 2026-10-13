@@ -642,7 +642,7 @@ class Layout(unittest.TestCase):
             lay = idle_layout.idle_layout(clock, text, date)
             self.assertEqual((lay.clock_cy, lay.date_cy, lay.line_y, lay.text_cy), (clock_cy, date_cy, line_y, text_cy), (clock, text, date))
             self.assertEqual(lay.date_px, date_px)
-            self.assertEqual(lay.text_px, 32 if clock else 48)
+            self.assertEqual(lay.text_px, 32 if (clock or date) else 48)      # the firmware: text_font = (clock || date) ? 32 : 48
 
     def test_hiding_the_date_keeps_the_old_positions(self):
         self.assertEqual(idle_layout.idle_layout(True, True, False).line_y, 262)

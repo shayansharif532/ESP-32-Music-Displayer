@@ -264,7 +264,7 @@ RESPONSE in two chunks, id 9, status 200, total 6, body "abcdef":
   chunk 2 (FLAGS 0x02, SEQ 1): fa de 01 11 02 01 09 00 03 00 53 c1 64 65 66 3d 27 ed b5
 
 PONG, id 0, empty payload:
-  fa de 01 31 03 00 00 00 00 00 70 e6 50 85 17 b6 16
+  fa de 01 31 03 00 00 00 00 00 70 e6 50 85 17 b6
 ```
 
 A stream that contains `fa de 01 30 ...` with one flipped byte, then the vector again, must yield exactly the second frame.

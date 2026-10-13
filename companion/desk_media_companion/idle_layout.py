@@ -14,7 +14,7 @@ vertical centre of the date's / custom line's label (a label's height is its fon
     yes    no    yes  |   172      252       26       296      -
     yes    yes   yes  |   138      214       26       252     300 (32)
     no     no    yes  |    -       215       48       262      -
-    no     yes   yes  |    -       178       48       236     290 (48)
+    no     yes   yes  |    -       178       48       236     290 (32)
 
 Contrast, like the clock's: Photo = four black copies of the text at (+-2, 0) and (0, +-2) with opacity 110/255 behind it, on top
 of the photo's 30 % black dim; Neon = four copies in the accent colour at the same offsets with opacity 46/255; Minimal and Dark
@@ -93,7 +93,7 @@ _POSITIONS = {
 def idle_layout(show_clock: bool, has_text: bool, show_date: bool) -> IdleLayout:
     clock_cy, date_cy, line_y, text_cy = _POSITIONS[(bool(show_clock), bool(has_text), bool(show_date))]
     return IdleLayout(clock_cy=clock_cy, date_cy=date_cy, date_px=26 if show_clock else 48, line_y=line_y, text_cy=text_cy,
-                      text_px=32 if show_clock else 48)
+                      text_px=32 if (show_clock or show_date) else 48)       # the 48 px date is the big element; the line under it is 32 px
 
 
 def label_top(centre_y: int, font_px: int) -> int:
