@@ -149,7 +149,7 @@ def _use_dpapi() -> bool:
 # ---- the store ------------------------------------------------------------------------------------------------------------------
 
 class PairedDevice(NamedTuple):
-    id: bytes              # the display's `dev` id of the pairing (8 bytes)
+    id: bytes              # the display's persistent `dev` id (8 bytes): the same value in its USB BEACON and in its /pair/offer
     key: bytes             # K (32 bytes)
     paired_at: int         # unix time
 
@@ -320,6 +320,17 @@ class Pairing:
         """The paired display's key (for request authentication), or None."""
         dev = self._store.device
         return dev.key if dev is not None else None
+
+    @property
+    def device_id(self) -> Optional[bytes]:
+        """The paired display's persistent `dev` id (8 bytes; the one its USB BEACON and its /pair/offer carry), or None."""
+        dev = self._store.device
+        return dev.id if dev is not None else None
+
+    def paired_with(self, dev_id: bytes) -> bool:
+        """Is the paired display the one with this `dev` id? (constant-time compare; False when nothing is paired)"""
+        mine = self.device_id
+        return mine is not None and bool(dev_id) and hmac.compare_digest(mine, bytes(dev_id))
 
     @property
     def window_open(self) -> bool:

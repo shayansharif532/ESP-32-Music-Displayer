@@ -1,43 +1,9 @@
-"""Small local HTTP API for the desk display (plain HTTP, LAN only; authenticated after pairing - docs/protocol.md).
+"""The LAN transport of the companion API: a small local HTTP server (plain HTTP, LAN only; authenticated after pairing - docs/protocol.md).
 
-    GET  /now-playing              current media session as JSON
-    GET  /artwork[?size=312[&maxw=432]]
-                                   current artwork, baseline JPEG (ETag = art_id + size). Without maxw: a size x size square.
-                                   With maxw: the artwork keeps its aspect ratio inside a maxw x size box (square art stays
-                                   square, 16:9 art becomes a landscape card); never stretched. App logos baked into the
-                                   image (Spotify) and black letterbox bars are removed first (see artwork.py).
-                                   size is clamped to 16..600, maxw to 16..800.
-    POST /control/playpause        also: /control/play  /control/pause  /control/next  /control/previous
-    POST /control/seek?position_ms=N
-                                   every control takes an optional  &app=Spotify.exe  = the app the display shows: the command
-                                   then goes to exactly that session and is refused if it is gone (never to another session)
-    GET  /volume                   volume of the app that is displayed (its own Windows audio-session volume, NOT the master volume)
-    POST /control/volume-up[?step=5][&app=Spotify.exe]   also: /control/volume-down   POST /volume?level=0..100
-                                   -> {"ok":true,"app":"Spotify.exe","volume":65,"muted":false,"sessions":1}
-    POST /control/source-next[?from=Spotify.exe]   also: /control/source-prev   (vertical swipe: switch the display to the next /
-                                   previous usable media session, wrapping around; pins the display to it. `from` = the app on
-                                   screen. -> {"ok":true,"changed":true,"app":"chrome.exe","source":"Chrome","index":1,"count":2,
-                                   "now":{...the new /now-playing...}}; changed=false when there is only one source)
-    POST /control/source-auto      back to automatic (follow the best session; also leaves a manual "Idle Screen" choice)
-    GET  /sources                  the swipe list: [{app, name, state, title, artist, displayed}], mode auto|manual. The last row is the
-                                   synthetic idle-screen item {"app":"idle","name":"Idle Screen","state":"idle","synthetic":true} (ADR-008):
-                                   always offered, never a Windows session. A swipe onto it (`from=` may be "idle" when the display shows it)
-                                   is a manual, temporary display choice: /now-playing then has idle_selected:true, media keeps playing,
-                                   any control / volume request with app=idle is refused, and it ends when any session starts playing
-    POST /control/shuffle[?app=Spotify.exe]   Spotify only: toggle shuffle (also /shuffle-on /shuffle-off)
-    POST /control/repeat[?app=...]            Spotify only: cycle repeat off -> list -> track -> off (also /repeat-off /repeat-list /repeat-track)
-                                   -> {"ok":true,"app":"Spotify.exe","spotify":true,"shuffle":true,"repeat":1,"can_shuffle":true,"can_repeat":true,"now":{...}}
-                                   refused (ok:false) for every other app. /now-playing carries spotify, shuffle, repeat (0 off, 1 list, 2 track), can_shuffle, can_repeat.
-    GET  /idle                     the idle-screen settings (theme, accent, clock, custom line, delay, picture info) + their version
-    GET  /idle/image               the background picture for the Photo theme: a ready-made 480x480 baseline JPEG (X-Idle-Crc = CRC-32);
-                                   404 when no picture is set. /now-playing carries `idle_v` (the settings version: the display
-                                   re-fetches /idle when it differs from the one it stored), `any_playing` (false = nothing plays
-                                   anywhere -> idle screen) and `clock_ms` (the PC's local time as ms since the epoch, for the clock).
-    GET  /health                   {"ok":true,"service":"desk-media-companion","version":"..."}   (open)
-    GET  /hello                    {"ok":true,"v":2,"id":"<companion id>","name":"<PC name>","paired":bool,"pairing":bool}   (open)
-    POST /pair/offer | /pair/reveal | /pair/confirm | /pair/cancel     GET /pair/status?dev=<16 hex>
-                                   the pairing handshake (pairing.py; JSON bodies of at most 1 KB; open, they are how a key comes to exist)
-    (--dev-tools only)  POST /debug/<action>   scripted input for the development firmware; same authentication as everything else
+The routes themselves (`GET /now-playing`, `/artwork`, `POST /control/...`, `/volume`, `/sources`, `/idle`, `/hello`, `/health`, `/pair/*`,
+the --dev-tools `/debug/*`) live in `api.py` and are shared with the USB link; this module is only the HTTP plumbing around them.
+It is OPTIONAL since the USB-first release: the product opens no listening socket unless the LAN transport is enabled (`--lan` or the
+setting), so a USB-only installation never triggers a Windows firewall prompt.
 
 Safety rails, in this order:
   1. only private / loopback / link-local clients are served; the Host header must be an IP address (blocks DNS rebinding); every POST
@@ -62,29 +28,19 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from .api import (MAX_BODY, PAIR_BODY_MAX, Api, ClientCtx, MediaBackend,  # noqa: F401  (the constants are re-exported for existing importers)
+                  CONTROL_ACTIONS, DEBUG_ACTIONS, SOURCE_ACTIONS, VOLUME_ACTIONS, split_target)
 from .auth import Authenticator, response_proof
-from .idle import IdleStore, crc32, local_clock_ms
-from .media import MediaMonitor
-from .pairing import Pairing, PairingError
+from .idle import IdleStore
+from .pairing import Pairing
 
 log = logging.getLogger("http")
 
-CONTROL_ACTIONS = {"playpause", "play", "pause", "next", "previous", "seek",
-                   "shuffle", "shuffle-on", "shuffle-off", "repeat", "repeat-off", "repeat-list", "repeat-track"}   # last 7: Spotify only
-VOLUME_ACTIONS = {"volume-up", "volume-down"}
-SOURCE_ACTIONS = {"source-next", "source-prev", "source-auto"}
 _HOST_IP = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^\[[0-9a-fA-F:]+\](:\d+)?$|^localhost(:\d+)?$")
 
-MAX_BODY = 4096                 # the API has no big requests: control routes carry no body at all
-PAIR_BODY_MAX = 1024
 MAX_CONNECTIONS = 32
-ART_SIZE_RANGE = (16, 600)
-ART_MAXW_RANGE = (16, 800)
-STEP_RANGE = (1, 50)
-SEEK_MAX_MS = 2 ** 31 - 1
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,9}")
 
 
@@ -118,25 +74,13 @@ def requires_signature(addr: str, method: str, path: str) -> bool:
     return not path.startswith("/pair/")
 
 
-DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
-                 "swipe_right", "swipe_left", "swipe_up", "swipe_down", "swipe_diag", "swipe_bar", "swipe_bar_v", "swipe_text",
-                 "touch_cover", "touch_play", "touch_shuffle", "touch_repeat", "key_up", "key_down", "keyhold_up", "keyhold_down",
-                 "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
-                 "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot",
-                 "pair_accept", "pair_cancel", "pair_shot", "touch_pair", "touch_paircancel"}
+def make_server(monitor: MediaBackend, port: int, dev_tools: bool = False, idle: IdleStore | None = None, *,
+                pairing: Pairing | None = None, bind: str = "0.0.0.0", auth: Authenticator | None = None,   # nosec B104: every interface by design (private clients only, signed)
+                api: Api | None = None) -> ThreadingHTTPServer:
+    """`api` lets the application share one `Api` between this server and the USB link; without it one is built from the other arguments."""
+    api = api or Api(monitor, idle, pairing, dev_tools)
+    pairing = api.pairing
 
-
-def _int_param(q: dict, name: str, default: Optional[int], lo: int, hi: int) -> Optional[int]:
-    """A query integer clamped to lo..hi; absent or not a number -> default (which may be None)."""
-    try:
-        value = int(q[name][0]) if name in q else default
-    except ValueError:
-        value = default
-    return None if value is None else max(lo, min(hi, value))
-
-
-def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False, idle: IdleStore | None = None, *,
-                pairing: Pairing | None = None, bind: str = "0.0.0.0", auth: Authenticator | None = None) -> ThreadingHTTPServer:   # nosec B104: every interface by design (private clients only, signed)
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "DeskMediaCompanion/" + __version__
@@ -268,20 +212,18 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False, idle:
             if data is None:
                 return
             try:
-                url = urlparse(self.path)
-                q = parse_qs(url.query, max_num_fields=32)
+                route, _query = split_target(self.path)
             except ValueError:
                 self._error(400, "bad request")
                 return
-            route = url.path
-            if requires_signature(self.client_address[0], self.command, route) and not self._authenticate():
+            addr = self.client_address[0]
+            needs_signature = requires_signature(addr, self.command, route)
+            if needs_signature and not self._authenticate():
                 return
-            if route.startswith("/pair/"):
-                self._pair(route, q, data)
-            elif post:
-                self._post(route, q)
-            else:
-                self._get(route, q)
+            ctx = ClientCtx("http", authenticated=needs_signature or is_loopback(addr), remote=addr,
+                            if_none_match=self.headers.get("If-None-Match", ""))
+            reply = api.handle(self.command, self.path, data, ctx)
+            self._send(reply.status, reply.body, reply.content_type, reply.headers)
 
         def do_GET(self):
             self._serve()
@@ -309,131 +251,6 @@ def make_server(monitor: MediaMonitor, port: int, dev_tools: bool = False, idle:
             self._refuse(501, "not implemented")
 
         do_PATCH = do_DELETE = do_PUT
-
-        # -- routes ----------------------------------------------------------------------------
-        def _get(self, route: str, q: dict) -> None:
-            if route == "/now-playing":
-                snap = monitor.now_playing()
-                if idle is not None:                           # per request, not cached with the snapshot: the clock moves on
-                    snap = dict(snap, idle_v=idle.version, clock_ms=local_clock_ms())
-                if dev_tools:
-                    pending = monitor.take_debug()
-                    if pending:
-                        snap = dict(snap, debug=pending)         # one-shot, only for dev firmware builds
-                self._json(200, snap)
-            elif route == "/artwork":
-                size = _int_param(q, "size", 300, *ART_SIZE_RANGE)
-                max_w = _int_param(q, "maxw", None, *ART_MAXW_RANGE)
-                art = monitor.artwork(size, max_w)
-                if art is None:
-                    self._error(404, "no artwork")
-                    return
-                art_id, jpeg = art
-                etag = f'"{art_id}-{size}-{max_w or 0}"'
-                if self.headers.get("If-None-Match") == etag:
-                    self._send(304, b"", "image/jpeg", {"ETag": etag})
-                else:
-                    self._send(200, jpeg, "image/jpeg", {"ETag": etag, "X-Art-Id": art_id})
-            elif route == "/idle" and idle is not None:
-                self._json(200, idle.config())
-            elif route == "/idle/image" and idle is not None:
-                data = idle.image()
-                if data is None:
-                    self._error(404, "no idle picture")
-                else:
-                    self._send(200, data, "image/jpeg", {"X-Idle-Crc": str(crc32(data))})
-            elif route == "/volume":
-                self._json(200, monitor.volume("get", app=q.get("app", [""])[0][:96]))
-            elif route == "/sources":
-                self._json(200, monitor.list_sources())
-            elif route == "/health":
-                self._json(200, {"ok": True, "service": "desk-media-companion", "version": __version__})
-            elif route == "/hello":
-                hello = {"ok": True, "v": 2, "id": pairing.cid_hex if pairing is not None else "0" * 16,
-                         "name": pairing.name if pairing is not None else "",
-                         "paired": pairing.paired if pairing is not None else False,
-                         "pairing": pairing.window_open if pairing is not None else False}
-                self._json(200, self._with_debug(hello))
-            else:
-                self._error(404, "not found")
-
-        def _with_debug(self, obj: dict) -> dict:
-            """Development builds only (--dev-tools): the one-shot /debug request also rides on the answers a display that is not paired
-            yet polls (it does not read /now-playing then), so the pairing screen can be driven and photographed from the PC."""
-            if dev_tools:
-                pending = monitor.take_debug()
-                if pending:
-                    return dict(obj, debug=pending)
-            return obj
-
-        def _pair(self, route: str, q: dict, data: bytes) -> None:
-            try:
-                if pairing is None:
-                    raise PairingError(403, "pairing_closed")
-                if self.command == "POST":
-                    try:
-                        obj = json.loads(data.decode("utf-8"))
-                    except (ValueError, RecursionError):
-                        raise PairingError(400, "bad_request") from None
-                    if not isinstance(obj, dict):
-                        raise PairingError(400, "bad_request")
-                    if route == "/pair/offer":
-                        out = pairing.offer(obj.get("dev"), obj.get("pub"), obj.get("ce"))
-                    elif route == "/pair/reveal":
-                        out = pairing.reveal(obj.get("dev"), obj.get("ne"))
-                    elif route == "/pair/confirm":
-                        out = pairing.confirm(obj.get("dev"), obj.get("proof"))
-                    elif route == "/pair/cancel":
-                        out = pairing.cancel(obj.get("dev"))
-                    else:
-                        raise PairingError(404, "not found")
-                elif route == "/pair/status":
-                    out = self._with_debug(pairing.status(q.get("dev", [""])[0]))
-                else:
-                    raise PairingError(404, "not found")
-            except PairingError as exc:
-                self._error(exc.status, exc.error)
-                return
-            self._json(200, out)
-
-        def _post(self, route: str, q: dict) -> None:
-            dbg = re.fullmatch(r"/debug/(\w+)", route)
-            if dbg and dev_tools and dbg.group(1) in DEBUG_ACTIONS:
-                monitor.request_debug(dbg.group(1))
-                self._json(200, {"ok": True, "debug": dbg.group(1)})
-                return
-            if route == "/volume":                          # absolute: POST /volume?level=40
-                level = _int_param(q, "level", None, 0, 100)
-                if level is None:
-                    self._error(400, "level (0..100) required")
-                    return
-                self._json(200, monitor.volume("volume-set", level=level, app=q.get("app", [""])[0][:96]))
-                return
-            m = re.fullmatch(r"/control/([\w-]+)", route)
-            shown_app = q.get("app", q.get("from", [""]))[0][:96]       # the app the display says it is showing
-            if m and m.group(1) in VOLUME_ACTIONS:           # relative: the displayed app's own volume, +/- step percent
-                self._json(200, monitor.volume(m.group(1), step=_int_param(q, "step", 5, *STEP_RANGE), app=shown_app))
-                return
-            if m and m.group(1) in SOURCE_ACTIONS:           # vertical swipe: next / previous media source (session)
-                if m.group(1) == "source-auto":
-                    self._json(200, monitor.auto_source())
-                else:
-                    self._json(200, monitor.switch_source(1 if m.group(1) == "source-next" else -1, shown_app))
-                return
-            if not m or m.group(1) not in CONTROL_ACTIONS:
-                self._error(404, "unknown control")
-                return
-            action = m.group(1)
-            position = None
-            if action == "seek":
-                position = _int_param(q, "position_ms", None, 0, SEEK_MAX_MS)
-                if position is None:
-                    self._error(400, "position_ms required")
-                    return
-            result = monitor.control(action, position, shown_app)
-            if action.startswith(("shuffle", "repeat")):                 # Spotify's buttons: the answer carries the fresh state
-                result["now"] = monitor.now_playing()
-            self._json(200, result)
 
     class Server(ThreadingHTTPServer):
         daemon_threads = True
