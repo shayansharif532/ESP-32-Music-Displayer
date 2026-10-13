@@ -4,7 +4,7 @@
 
 Only selection requests are sent (source-next / source-prev / source-auto) plus a control aimed at a session that does not exist
 (which must be refused). Nothing is played, paused, skipped or volume-changed. Run it against a SEPARATE companion instance
-(`python -m desk_media_companion --port 8790 --no-discovery`) so the real display's selection is not disturbed.
+(`python -m desk_media_companion --lan --no-usb --port 8790 --no-discovery`) so the real display's selection is not disturbed.
 """
 import argparse
 import json

@@ -1,7 +1,7 @@
 # DeskMedia Companion (Windows)
 
 Reads the PC's active **media sessions** (Windows Global System Media Transport Controls, `Windows.Media.Control`) and serves them to the
-DeskMedia ESP32 display over the local network. It works with anything that publishes to the Windows media overlay: Spotify desktop,
+DeskMedia ESP32 display over the USB cable (or, optionally, the local network). It works with anything that publishes to the Windows media overlay: Spotify desktop,
 YouTube / YouTube Music (and any site using the browser Media Session API) in Chrome / Edge / Firefox, VLC, Apple Music, ... Per-application
 volume comes from the Windows Core Audio session API. No Spotify account, OAuth or internet access is involved.
 
@@ -20,14 +20,17 @@ python -m venv .venv
 
 | Option | Meaning |
 |---|---|
-| `--port 8765` | HTTP port the display connects to |
-| `--discovery-port 8766` / `--no-discovery` | UDP beacon port / disable the beacon (then set the PC's address in the firmware's `secrets.local.h`) |
+| `--lan` | also serve the display over the local network for this run (HTTP server + UDP discovery beacon), even when the LAN setting is off. The default is USB only: with LAN off the companion opens **no** listening socket, so Windows never shows a firewall prompt |
+| `--no-usb` | do not talk to the display over USB (development: LAN only, e.g. `--lan --no-usb --port 8790`) |
+| `--usb-port COM5` | development: probe only this serial port instead of every USB-Serial/JTAG port (VID 303A / PID 1001); a port only counts as a display after it sent a valid BEACON |
+| `--port 8765` | HTTP port of the LAN transport (only used with `--lan` or the LAN setting) |
+| `--discovery-port 8766` / `--no-discovery` | LAN transport: UDP beacon port / disable the beacon (then set the PC's address in the firmware's `secrets.local.h`) |
 | `--console` / `--quiet` | also log to the console / background mode (file log only, used by auto-start) |
 | `--debug` | verbose log (every HTTP request) |
 | `--probe` | print the current media state once and exit |
 | `--install-startup` / `--remove-startup` | start with Windows (per-user `HKCU\...\Run` entry; no admin rights needed) / undo |
 | `--no-tray` / `--open-settings` | no tray icon or settings window (tests, headless runs) / open the Idle Screen settings window at start |
-| `--data-dir DIR` | keep the idle-screen data in `DIR\idle` and the pairing store in `DIR` instead of `%LOCALAPPDATA%\DeskMediaCompanion` |
+| `--data-dir DIR` | keep the idle-screen data in `DIR\idle`, the pairing store and the app settings (`settings.json`: `usb_enabled`, `lan_enabled`, `usb_auto_pair`) in `DIR` instead of `%LOCALAPPDATA%\DeskMediaCompanion` |
 | `--bind ADDR` | local address the API listens on (default `0.0.0.0` = every interface; only private / loopback / link-local clients are served either way and all but this PC must be paired; `127.0.0.1` = this PC only) |
 | `--pair-console` | headless pairing: opens the 120 s pairing window at start, prints the code on the console, `y` / `n` on stdin confirms or cancels (no tray needed) |
 | `--dev-tools`, `--prefer-app APP`, `--only-apps A,B`, `--ignore-apps A,B`, `--treat-as-spotify APP` | development only: enable the `/debug/*` routes used by `tools/screenshot.py`; always show that app's session; isolate or hide sessions so fake test sessions never reach the display you use; treat a fake session as Spotify to test the shuffle / repeat buttons |
@@ -40,8 +43,10 @@ pictures `%LOCALAPPDATA%\DeskMediaCompanion\idle\`; the pairing store `pairing.b
 A display pairs with exactly one companion, once. Open the tray menu, choose **Pair a display...**, compare the six-digit code shown on
 the display and on the PC and confirm on both ends. Afterwards every request from the display is signed and the companion refuses
 unsigned requests from the network (requests from the PC itself are exempt). **Forget paired display** in the tray menu revokes the
-display at once; pairing again replaces it. Only one copy of the companion runs per port (a second start exits). The full procedure and the cryptography are in
-[../docs/protocol.md](../docs/protocol.md).
+display at once; pairing again replaces it. Over USB the pairing window opens by itself (120 s) when an unpaired display appears and nothing is paired yet
+(never when a display is already paired, and not again for 10 minutes after a cancel). Only one copy of the companion runs per Windows session (a second start exits);
+a LAN-only development instance (`--lan --no-usb --port N`) is limited to one per port instead. The full procedure and the cryptography are in
+[../docs/protocol.md](../docs/protocol.md); the USB transport is [../docs/usb-protocol.md](../docs/usb-protocol.md).
 
 ## Build the single-file exe
 
@@ -53,6 +58,7 @@ The exe needs no Python on the target PC. `DeskMediaCompanion.exe --install-star
 
 ## Windows Firewall
 
+Only relevant when the optional LAN transport is on (`--lan` or the setting); over USB nothing listens and Windows never asks.
 The first time the app listens, Windows asks whether to allow it - choose **Allow**. The display connects to **TCP 8765**. If Windows never
 asked (or it was dismissed), the display shows "Can't reach your PC". The fix needs one administrator approval, e.g. in an elevated PowerShell:
 
