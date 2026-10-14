@@ -124,7 +124,8 @@ def main() -> int:
                 m = re.search(name + r"=(\d+)", line)
                 return int(m.group(1)) if m else 0
             check("5 internal heap steady", field(health[-1], "int_free") >= field(health[0], "int_free") - 4096, f"{field(health[0], 'int_free')} -> {field(health[-1], 'int_free')}")
-            check("5 PSRAM did not leak", field(health[-1], "psram_free") >= field(health[0], "psram_free") - 131072, f"{field(health[0], 'psram_free')} -> {field(health[-1], 'psram_free')}")
+            base = health[len(health) // 2]                          # the cover and background buffers are allocated once, at the first artwork: the baseline is taken after that
+            check("5 PSRAM did not leak (after the first cover was decoded)", field(health[-1], "psram_free") >= field(base, "psram_free") - 131072, f"{field(base, 'psram_free')} -> {field(health[-1], 'psram_free')}")
             check("5 LVGL stack headroom healthy", field(health[-1], "lvgl_stack_free_min") >= 8000, str(field(health[-1], "lvgl_stack_free_min")))
         results["link_counters"] = counters
     finally:
