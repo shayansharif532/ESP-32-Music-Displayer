@@ -90,7 +90,7 @@ def start(app, paused):
 
 def main() -> int:
     data_dir = tempfile.mkdtemp(prefix="idle-source-test-")
-    comp = subprocess.Popen([fakes.VENV_PY, "-m", "desk_media_companion", "--port", str(PORT), "--no-discovery", "--quiet", "--no-tray",
+    comp = subprocess.Popen([fakes.VENV_PY, "-m", "desk_media_companion", "--lan", "--no-usb", "--port", str(PORT), "--no-discovery", "--quiet", "--no-tray",
                              "--only-apps", f"{A},{B}", "--data-dir", data_dir],
                             cwd=os.path.join(ROOT, "companion"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
