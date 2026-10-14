@@ -28,8 +28,8 @@
 
 static const char *TAG = "usb_link";
 
-#define DRIVER_RX_BYTES     8192                    /* a frame is at most 4112 bytes; the rx task drains the ring at once */
-#define DRIVER_TX_BYTES     8192                    /* ... and a write is all-or-nothing into the ring: it must hold the biggest frame */
+#define DRIVER_RX_BYTES     16384                   /* a frame is at most 4112 bytes; the rx task drains the ring at once */
+#define DRIVER_TX_BYTES     16384                   /* ... and a write is all-or-nothing into the ring: it must hold the biggest frame */
 #define COMPANION_STALE_MS  6000            /* no frame from the companion for this long: it is gone */
 #define BEACON_FAST_MS      1000            /* no companion yet */
 #define BEACON_SLOW_MS      2000            /* keep-alive while linked */
