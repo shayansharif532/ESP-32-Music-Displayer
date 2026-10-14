@@ -199,7 +199,7 @@ once on both ends -> done. Every later day: plug in, nothing to do (the companio
 
 | Symptom | What to check |
 |---|---|
-| Setup says it "has detected that DeskMedia Companion is currently running" | Quit the companion (tray icon > *Quit*), or it is another copy (a development one); then click OK |
+| Setup says it "has detected that DeskMedia Companion is currently running" | Quit the companion (tray icon > *Exit*), or it is another copy (a development one); then click OK |
 | Setup exits with code 1 silently | a copy is running (add `/LOG`, read the log); or the PC is older than Windows 10 1809 / 32-bit |
 | The tray icon does not appear after installing | run `DeskMediaCompanion.exe --selftest` (see above); read `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (a crash is logged there) |
 | `ISCC.exe` not found by the build | install Inno Setup 6 or set `$env:ISCC` |

@@ -26,7 +26,7 @@ python -m venv .venv
 | `--port 8765` | HTTP port of the LAN transport (only used with `--lan` or the LAN setting) |
 | `--discovery-port 8766` / `--no-discovery` | LAN transport: UDP beacon port / disable the beacon (then set the PC's address in the firmware's `secrets.local.h`) |
 | `--console` / `--quiet` | also log to the console / background mode (file log only, used by auto-start) |
-| `--debug` | verbose log (every HTTP request) |
+| `--debug` | verbose log (every HTTP request, and the display's own log lines) |
 | `--probe` | print the current media state once and exit |
 | `--install-startup` / `--remove-startup` | start with Windows (per-user `HKCU\...\Run` entry; no admin rights needed) / undo |
 | `--no-tray` / `--open-settings` | no tray icon or settings window (tests, headless runs) / open the Idle Screen settings window at start |
@@ -35,7 +35,7 @@ python -m venv .venv
 | `--pair-console` | headless pairing: opens the 120 s pairing window at start, prints the code on the console, `y` / `n` on stdin confirms or cancels (no tray needed) |
 | `--dev-tools`, `--prefer-app APP`, `--only-apps A,B`, `--ignore-apps A,B`, `--treat-as-spotify APP` | development only: enable the `/debug/*` routes used by `tools/screenshot.py`; always show that app's session; isolate or hide sessions so fake test sessions never reach the display you use; treat a fake session as Spotify to test the shuffle / repeat buttons |
 
-Data locations: log `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (rotating; it contains track titles, no secrets); idle-screen settings and
+Data locations (all under `--data-dir`, default `%LOCALAPPDATA%\DeskMediaCompanion`): log `companion.log` (rotating; connection events and the display's warnings and errors, never keys; the display's ordinary lines, which name the playing track, only with `--debug`); idle-screen settings and
 pictures `%LOCALAPPDATA%\DeskMediaCompanion\idle\`; the pairing store `pairing.bin` (companion id + key) is per user and protected with Windows DPAPI (`pairing.py`); it is useless on another account or another PC and is never logged.
 
 ## Pairing
@@ -116,7 +116,7 @@ double-click it -> **Settings...** opens the *Idle Screen* window - no command l
 | Show idle screen after | how long nothing must have played before the idle screen appears (2-60 s, default 4 s) |
 
 The window shows a preview (before you press **Apply**); the display picks the change up within a second and keeps it in its own flash, so it
-survives a reboot of the display, the companion or Windows. The tray menu also has **Pair a display...**, **Start with Windows** and **Quit**.
+survives a reboot of the display, the companion or Windows. The tray menu (the display's status on its first row) has **Idle screen settings...**, **Pair a display...**, **Forget paired display**, **Start with Windows**, **Advanced** (*Also connect over Wi-Fi (LAN)*, *Pair a new display automatically*), **Open log folder**, **About** (versions) and **Exit**; the icon's small dot is green when the display is connected, amber when something needs doing (pairing), red when it needs attention (an update, a busy port) and grey while it is looking for the display.
 `pystray` is in `requirements.txt`; without it the companion still runs, just without the icon.
 
 On the display: tap the idle screen while a (paused) session exists to bring the player back for 30 s; anything that starts playing brings it back at once.

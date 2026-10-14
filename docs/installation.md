@@ -37,9 +37,12 @@ In USB mode the program opens no network port, so **Windows does not show a fire
 
 * **Plug in, nothing else.** The companion starts when you sign in to Windows and the display connects as soon as it is plugged in. Unplug
   it and plug it back in whenever you like; no pairing is needed again.
-* **The icon next to the clock.** Right-click it for the menu: **Settings...** (the idle screen: what the display shows when nothing is
-  playing - theme, clock, date, your own picture), **Pair a display...**, **Forget paired display**, **Start with Windows**, **Quit**.
-  After **Quit** the display says it cannot find the program; start it again from the Start menu (*DeskMedia Companion*).
+* **The icon next to the clock.** Its small dot shows the state (green: the display is connected; amber: something needs doing, e.g. pairing;
+  red: needs attention, e.g. an update or a busy port; grey: looking for the display) and hovering shows it in words. Right-click it for the menu: the
+  display's status, **Idle screen settings...** (what the display shows when nothing is playing - theme, 12 / 24 hour clock, date format or hidden,
+  your own picture), **Pair a display...**, **Forget paired display**, **Start with Windows**, **Advanced** (the optional Wi-Fi / LAN mode and the
+  automatic pairing window), **Open log folder**, **About** (the versions, handy for a bug report) and **Exit**.
+  After **Exit** the display says it cannot find the program; start it again from the Start menu (*DeskMedia Companion*).
 * **Updating.** Run the newer installer; it replaces the old version and keeps your settings and the pairing. A running copy is closed for you.
 * **Uninstalling.** Windows **Settings > Apps > Installed apps > DeskMedia Companion > Uninstall**. Setup then asks whether to delete your
   settings and the pairing as well. The default answer, **No**, keeps them, so a later reinstall continues where you left off.
@@ -55,7 +58,7 @@ In USB mode the program opens no network port, so **Windows does not show a fire
 | The display says "Update DeskMedia Companion" | Install the newer Setup on the PC (it keeps your settings and the pairing) |
 | The display says "Update the display" | The PC program is newer than the display's own software: follow the project's firmware update instructions |
 | Windows blocked the installer | Click **More info > Run anyway** (see step 2) |
-| Still stuck | The program writes a log to `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (paste that into the File Explorer address bar). It lists what happened, and also the titles of what was playing |
+| Still stuck | The program writes a log to `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (paste that into the File Explorer address bar). It lists what happened (connections, pairing, errors) but never the pairing key; the title of what was playing is only logged when the program is started with `--debug` |
 
 ## For whoever hands a display to somebody else
 

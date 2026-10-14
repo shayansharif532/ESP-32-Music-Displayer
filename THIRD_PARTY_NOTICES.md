@@ -71,6 +71,7 @@ The exe is built with PyInstaller and contains the Python 3.12 runtime, Tcl/Tk a
 | pystray 0.19.5 | **LGPL-3.0-or-later** | Copyright (C) 2016-2022 Moses Palmer. See the LGPL notice below. |
 | Pillow 12.x | MIT-CMU (HPND-style) | Copyright (c) 1997-2011 Secret Labs AB; 1995-2011 Fredrik Lundh; 2010 Jeffrey A. Clark and contributors. The wheel bundles brotli, FreeType, HarfBuzz, Little-CMS, libavif, libjpeg-turbo, libpng, libwebp, OpenJPEG, libtiff, xz, zlib-ng - their notices are in Pillow's own `LICENSE`, shipped as `LICENSES/Pillow-LICENSE.txt` |
 | psutil 7.x | BSD-3-Clause | Copyright (c) 2009 Jay Loden, Dave Daeschler, Giampaolo Rodola |
+| pyserial 3.5 (the USB link: finds and opens the display's COM port) | BSD-3-Clause | Copyright (c) 2001-2020 Chris Liechti. The wheel ships no licence file; the standard text is `LICENSES/pyserial-BSD-3-Clause.txt` |
 | pycaw | MIT | Copyright (c) 2016 AndreMiras |
 | comtypes 1.4 | MIT | Copyright (c) 2006-2013 Thomas Heller; 2014 Comtypes Developers |
 | winrt-runtime and the `winrt-Windows.*` projections 3.2 | MIT | Copyright (c) Microsoft Corporation; Copyright (c) 2021-2025 David Lechner |
