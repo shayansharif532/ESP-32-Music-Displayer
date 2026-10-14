@@ -81,7 +81,7 @@ DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
                  "touch_cover", "touch_play", "touch_shuffle", "touch_repeat", "key_up", "key_down", "keyhold_up", "keyhold_down",
                  "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                  "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot",
-                 "pair_accept", "pair_cancel", "pair_shot", "touch_pair", "touch_paircancel"}
+                 "pair_accept", "pair_cancel", "pair_shot", "touch_pair", "touch_paircancel", "reboot"}
 
 MAX_BODY = 4096                 # the API has no big requests: control routes carry no body at all
 PAIR_BODY_MAX = 1024            # /pair/* and /link/*

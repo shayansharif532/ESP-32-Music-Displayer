@@ -287,8 +287,13 @@ LogSink = Callable[[str, str], None]       # (kind "log" | "raw", one clean line
 
 
 def default_log_sink(kind: str, line: str) -> None:
-    """Display text goes to the log as DATA (`%s`), never as a format string and never interpreted."""
-    logging.getLogger("usb.display").log(logging.INFO if kind == "log" else logging.DEBUG, "%s", line)
+    """Display text goes to the log as DATA (`%s`), never as a format string and never interpreted. Only the display's warnings and errors
+    ("W (" / "E (" lines) are kept at the normal log level: its ordinary lines name the track that is playing, which has no business in a
+    log file on disk (they show with --debug)."""
+    level = logging.DEBUG
+    if kind == "log":
+        level = logging.WARNING if line.startswith("E (") else logging.INFO if line.startswith("W (") else logging.DEBUG
+    logging.getLogger("usb.display").log(level, "%s", line)
 
 
 # ---- one connection --------------------------------------------------------------------------------------------------------------------------
@@ -325,8 +330,9 @@ class Link:
     def __init__(self, port: SerialLike, api: Api, *, name: str = "", clock: Callable[[], float] = time.monotonic,
                  rand: Callable[[int], bytes] = secrets.token_bytes, arbiter: Optional[Callable[["Link"], bool]] = None,
                  log_sink: Optional[LogSink] = None, on_change: Optional[Callable[[], None]] = None, threaded: bool = True,
-                 read_timeout: float = READ_TIMEOUT_S) -> None:
+                 read_timeout: float = READ_TIMEOUT_S, log_unlimited: bool = False) -> None:
         self.name = name
+        self._log_unlimited = log_unlimited               # development only (--dev-tools): a screenshot is ~2400 lines, the budget would eat it
         self._port = port
         self._api = api
         self._clock = clock
@@ -532,7 +538,7 @@ class Link:
         with self._lock:
             self._log_tokens = min(LOG_BURST, self._log_tokens + (now - self._log_stamp) * LOG_RATE_PER_S)
             self._log_stamp = now
-            allowed = self._log_tokens >= 1.0
+            allowed = self._log_unlimited or self._log_tokens >= 1.0
             if allowed:
                 self._log_tokens -= 1.0
                 self._counters["log_lines"] += 1
@@ -798,7 +804,8 @@ class LinkManager:
     def __init__(self, api: Api, *, lister: PortLister = list_serial_ports, opener: PortOpener = open_serial_port,
                  clock: Callable[[], float] = time.monotonic, only_port: str = "", threaded: bool = True, log_sink: Optional[LogSink] = None,
                  auto_pair: bool = True, scan_period: float = SCAN_PERIOD_S, rand: Callable[[int], bytes] = secrets.token_bytes,
-                 read_timeout: float = READ_TIMEOUT_S) -> None:
+                 read_timeout: float = READ_TIMEOUT_S, log_unlimited: bool = False) -> None:
+        self._log_unlimited = log_unlimited
         self._api = api
         self._lister = lister
         self._opener = opener
@@ -1001,7 +1008,8 @@ class LinkManager:
             return
         rec.busy, rec.busy_tries = False, 0
         link = Link(port, self._api, name=rec.name, clock=self._clock, rand=self._rand, arbiter=self._arbitrate, log_sink=self._log_sink,
-                    on_change=self._wake.set, threaded=self._threaded, read_timeout=self._read_timeout)
+                    on_change=self._wake.set, threaded=self._threaded, read_timeout=self._read_timeout,
+                    log_unlimited=self._log_unlimited)
         rec.link, rec.opened_at = link, now
         log.info("probing %s", rec.name)
         if self._threaded:

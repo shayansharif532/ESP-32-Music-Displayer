@@ -177,7 +177,8 @@ class AppRuntime:
     def _start_usb(self) -> None:
         from .usblink import LinkManager, list_serial_ports, open_serial_port
         manager = LinkManager(self.api, lister=self._lister or list_serial_ports, opener=self._opener or open_serial_port,
-                              only_port=self._usb_port, log_sink=self._log_sink, auto_pair=self.settings.get().usb_auto_pair)
+                              only_port=self._usb_port, log_sink=self._log_sink, auto_pair=self.settings.get().usb_auto_pair,
+                              log_unlimited=self._dev_tools)
         manager.add_listener(self._emit)
         manager.start()
         self._manager = manager

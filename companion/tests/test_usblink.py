@@ -279,8 +279,19 @@ class Housekeeping(RigCase):
         rig = self.connected()
         with self.assertLogs("usb.display", "DEBUG") as logs:
             rig.sim.log("%s %(x)s {0}")
+            rig.sim.log("W (12) app: a warning %s")
+            rig.sim.log("E (13) app: an error")
+            rig.sim.log('I (14) pc_media: now playing "Some Title"')
             rig.settle()
-        self.assertEqual(logs.output, ["INFO:usb.display:%s %(x)s {0}"])
+        self.assertEqual(logs.output, ["DEBUG:usb.display:%s %(x)s {0}", "INFO:usb.display:W (12) app: a warning %s",
+                                       "WARNING:usb.display:E (13) app: an error", 'DEBUG:usb.display:I (14) pc_media: now playing "Some Title"'])
+
+    def test_ordinary_display_lines_stay_out_of_the_normal_log(self):
+        rig = self.connected()
+        with self.assertLogs("usb.display", "DEBUG") as logs:
+            rig.sim.log('I (14) pc_media: now playing "Some Title"')
+            rig.settle()
+        self.assertEqual([r.levelname for r in logs.records], ["DEBUG"])
 
     def test_log_floods_are_rate_limited(self):
         lines = []
@@ -294,6 +305,15 @@ class Housekeeping(RigCase):
         rig.sim.log("later")
         rig.settle()
         self.assertEqual(lines[-1], "later")
+
+    def test_the_development_mode_has_no_line_budget(self):
+        lines = []
+        rig = self.connected(link_kwargs={"log_sink": lambda kind, line: lines.append(line), "log_unlimited": True})
+        for i in range(500):                                          # a screenshot is ~2400 lines in a burst
+            rig.sim.log(f"spam {i}")
+        rig.settle()
+        self.assertEqual(len(lines), 500)
+        self.assertEqual(rig.link.counters().get("log_dropped", 0), 0)
 
     def test_text_between_frames_goes_to_the_sink_as_raw_lines(self):
         lines = []
