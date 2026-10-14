@@ -175,13 +175,13 @@ class Board:
 # ---- the companion under test ----------------------------------------------------------------------------------------------
 
 class Companion:
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: str, pairing_dir: str | None = None) -> None:
         self.data_dir = data_dir
         self.monitor = MediaMonitor()
         self.monitor.only_apps = {A, B}
         self.monitor.spotify_ids = {A}
         self.monitor.start()
-        self.pairing = Pairing(PairingStore())                         # the DEFAULT store: the board stays paired with the normal companion's key
+        self.pairing = Pairing(PairingStore(pairing_dir))              # the DEFAULT store (pairing_dir None): the board stays paired with the normal companion's key
         self.calls: list[tuple] = []                                   # every media command / volume request that reached the companion
         real_control, real_volume = self.monitor.control, self.monitor.volume
 
@@ -891,6 +891,9 @@ def phase_soak(board: Board, comp: Companion, cycles: int) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="auto")
+    ap.add_argument("--transport", choices=("lan", "usb"), default="lan",
+                    help="lan: the companion of this test serves the board over Wi-Fi (the board has the LAN credentials); usb: it talks to the board "
+                         "over the USB cable (tools/usb_harness.py; scratch data folder, the board is paired fresh)")
     ap.add_argument("--soak-cycles", type=int, default=30)
     ap.add_argument("--skip-soak", action="store_true")
     ap.add_argument("--skip-slow", action="store_true", help="skip the minute-rollover wait")
@@ -898,18 +901,27 @@ def main() -> int:
     ap.add_argument("--only", default="", help="comma separated phases to run: basics,themes,minute,modes,persistence,fallbacks,carousel,peek,ringshots,ringsoak,soak,evidence")
     args = ap.parse_args()
 
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=2)
-        print(f"something already listens on port {PORT}: stop the normal companion first (this test brings its own).")
-        return 2
-    except OSError:
-        pass
+    if args.transport == "lan":
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=2)
+            print(f"something already listens on port {PORT}: stop the normal companion first (this test brings its own).")
+            return 2
+        except OSError:
+            pass
     os.makedirs(LOGS, exist_ok=True)
-    port = sc.detect_port() if args.port == "auto" else args.port
     data_dir = tempfile.mkdtemp(prefix="idle-test-")
     procs: dict = {}
-    board = Board(port)
-    comp = Companion(os.path.join(data_dir, "idle"))
+    if args.transport == "usb":
+        import usb_harness as uh
+        board = uh.UsbBoard()
+        comp = uh.UsbCompanion(os.path.join(data_dir, "idle"), board, usb_port="" if args.port == "auto" else args.port)
+        if not uh.ensure_paired(board, comp):
+            print("the display could not be paired over USB (is it connected, running a development build, not in use by another program?)")
+            return 2
+    else:
+        port = sc.detect_port() if args.port == "auto" else args.port
+        board = Board(port)
+        comp = Companion(os.path.join(data_dir, "idle"))
     try:
         comp.store.update(delay_s=4)
         only = {x.strip() for x in args.only.split(",") if x.strip()}

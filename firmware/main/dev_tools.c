@@ -22,6 +22,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_rom_crc.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -253,6 +254,10 @@ void dev_tools_handle(const char *what)
         if (copy && xTaskCreatePinnedToCore(idle_cfg_task, "idle_cfg", 6144, copy, 2, NULL, 0) != pdPASS) {
             free(copy);
         }
+    } else if (strcmp(what, "reboot") == 0) {                   /* a software reset: the native USB port stays enumerated (tests of "after a board reboot") */
+        ESP_LOGW(TAG, "debug reboot");
+        vTaskDelay(pdMS_TO_TICKS(150));                          /* the log line leaves first */
+        esp_restart();
     } else if (strcmp(what, "pair_shot") == 0) {
         xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {
