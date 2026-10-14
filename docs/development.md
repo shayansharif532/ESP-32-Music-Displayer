@@ -130,15 +130,20 @@ All options and the data locations are in [../companion/README.md](../companion/
   to TCP **8765**; the discovery beacon is UDP **8766**. If the display shows "Can't reach your PC", check this first.
 * No media app running? `companion\tools\fake_media_session.py` registers a silent test session; see the companion README.
 
-## Package the companion as a single exe
+## Package the companion and build the Windows installer
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1     # -> companion\dist\DeskMediaCompanion.exe (about 24 MB, no console window)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1     # -> installer\output\DeskMediaCompanion-Setup-<version>.exe (about 18 MB)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1         # only the app folder: companion\dist\DeskMediaCompanion\DeskMediaCompanion.exe
 ```
 
-The script creates `companion\.venv` if it is missing and uses PyInstaller (`--onefile --noconsole`, with the WinRT, pycaw, comtypes and
-pystray hidden imports). The exe needs no Python on the target PC and includes the tray icon and the Settings window.
-`DeskMediaCompanion.exe --install-startup` makes it start with Windows. `dist/` and `*.spec` are git-ignored.
+`tools\build_release.ps1` creates `companion\.venv` if it is missing, builds the app with PyInstaller from
+`companion\DeskMediaCompanion.spec` (a **folder**, not one file: no slow self-extraction at every start, fewer antivirus false positives; no console
+window; icon, version resource and manifest included), runs the packaged exe's `--version` / `--selftest` in a scrubbed environment and compiles the
+per-user **Inno Setup 6** installer (no administrator rights, no reboot, no firewall change). The exe needs no Python on the target PC and includes
+the tray icon and the Settings window. Build, silent install switches, code signing and the three packaging tests (`installer_smoke_test.py`,
+`installer_flow_test.py`, `quit_listener_test.py`) are described in [../installer/README.md](../installer/README.md); the end-user view is in
+[installation.md](installation.md). `dist/`, `build/`, `installer/output/` and the generated `version_info.txt` / `version.iss` are git-ignored; the `.spec` is committed.
 
 ## Pair the display
 
@@ -217,7 +222,8 @@ PORTFOLIO.md          short project summary for CVs / portfolios
 CLAUDE.md             orientation for contributors and AI assistants (rules, pitfalls)
 docs/                 architecture.md, protocol.md, security.md, hardware.md, development.md, decisions/ (ADRs),
                       development-history/ (engineering logs per milestone), screenshots/
-companion/            Windows companion (Python): desk_media_companion/, tests/, tools/, build.ps1
+companion/            Windows companion (Python): desk_media_companion/, tests/, tools/, build.ps1, DeskMediaCompanion.spec
+installer/            Windows installer (Inno Setup script, artwork generator, README); built by tools/build_release.ps1
 firmware/             the ESP-IDF project: main/, components/{ui,wifi_mgr,pc_media,idle_screen,side_keys}, partitions.csv, sdkconfig.defaults, secrets.example.h
 tools/                PowerShell and Python helpers: idf.ps1, find-board.ps1, serial_capture.py, board-in-the-loop tests, ...
 backup/               put your own factory flash backup here (git-ignored *.bin)

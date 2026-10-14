@@ -110,9 +110,14 @@ desktop.ini
 .claude/settings.local.json
 .claude/*.local.*
 
-# Companion packaging output (PyInstaller)
+# Companion packaging output (PyInstaller, Inno Setup). The spec is source (the single source of build truth); its generated files are not.
 dist/
 *.spec
+!companion/DeskMediaCompanion.spec
+companion/version_info.txt
+installer/version.iss
+installer/output/
+installer/build/
 
 # --- 9. PERSONAL IDLE-SCREEN CUSTOMISATION (never push) --------------------------------------------------------------
 # The companion keeps a user's idle screen (settings file + chosen picture) in %LOCALAPPDATA%\DeskMediaCompanion\idle, outside the

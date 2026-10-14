@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest of DeskMediaCompanion.exe (embedded by PyInstaller, see DeskMediaCompanion.spec).
+
+    asInvoker       runs with the rights of the user who starts it: never a UAC prompt (per-user program, no admin rights needed)
+    supportedOS     Windows 10 and Windows 11 (one id covers both); the media-session API needs Windows 10 1809 or later
+    dpiAware        System DPI awareness: crisp text and tray icon on scaled displays. This is what ui.py asks for at run time
+                    (SetProcessDpiAwareness(1)); Tcl/Tk cannot re-scale per monitor, so per-monitor awareness is deliberately not
+                    declared.
+    Common-Controls version 6 look for the native dialogs (file chooser, message boxes)
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="DeskMediaDisplay.DeskMediaCompanion" version="1.0.0.0" processorArchitecture="amd64"/>
+  <description>DeskMedia Companion</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">system</dpiAwareness>
+    </windowsSettings>
+  </application>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

@@ -48,13 +48,16 @@ display at once; pairing again replaces it. Over USB the pairing window opens by
 a LAN-only development instance (`--lan --no-usb --port N`) is limited to one per port instead. The full procedure and the cryptography are in
 [../docs/protocol.md](../docs/protocol.md); the USB transport is [../docs/usb-protocol.md](../docs/usb-protocol.md).
 
-## Build the single-file exe
+## Build the packaged app and the Windows installer
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1     # -> companion\dist\DeskMediaCompanion.exe (about 24 MB, no console window)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1          # -> companion\dist\DeskMediaCompanion\DeskMediaCompanion.exe (a folder, no console window)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1      # + installer\output\DeskMediaCompanion-Setup-<version>.exe
 ```
 
-The exe needs no Python on the target PC. `DeskMediaCompanion.exe --install-startup` makes it start with Windows.
+The app needs no Python on the target PC; the installer (per user, no administrator rights) is described in [../installer/README.md](../installer/README.md).
+The packaged exe also understands `--selftest` (checks every bundled dependency, prints one JSON line), `--quit` (asks a running companion to exit) and
+`--version` (windowless: written to `%TEMP%\deskmedia-version.txt` when there is no stdout). `DeskMediaCompanion.exe --install-startup` makes it start with Windows.
 
 ## Windows Firewall
 
