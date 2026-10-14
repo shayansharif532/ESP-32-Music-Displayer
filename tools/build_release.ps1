@@ -3,8 +3,7 @@
   Builds the DeskMedia Companion release: the PyInstaller folder, a self-test of it, and the Inno Setup installer.
 
 .DESCRIPTION
-  1. creates / reuses companion\.venv and installs requirements.txt, requirements-build.txt (PyInstaller) and, until requirements.txt
-     lists it, pyserial
+  1. creates / reuses companion\.venv and installs requirements.txt (incl. pyserial, the USB link) and requirements-build.txt (PyInstaller)
   2. generates companion\version_info.txt and installer\version.iss from desk_media_companion.__version__
   3. runs PyInstaller on companion\DeskMediaCompanion.spec (onedir: companion\dist\DeskMediaCompanion\DeskMediaCompanion.exe + _internal\)
   4. checks the result: windowless x64 exe, manifest, version resource, icon, bundled assets, then runs --version and --selftest
@@ -20,7 +19,8 @@
 .PARAMETER RunTests        Run the unit tests (companion\tests) before building.
 .PARAMETER Clean           Delete companion\build and companion\dist first (PyInstaller is run with --clean in any case).
 .PARAMETER Python          Interpreter used to CREATE companion\.venv when it does not exist (default: py -3.12, then python).
-.PARAMETER ProjectUrl      Home page shown in Programs and Features. Default: the https URL of the 'origin' remote; '' = none.
+.PARAMETER ProjectUrl      Home page shown in Programs and Features: a URL, or 'origin' for the GitHub URL of the origin remote. Default: none
+                           (a repository URL contains its owner's account name, so publishing it is the project owner's decision).
 .PARAMETER SignTool        Optional code signing. The command Inno Setup runs for every file to sign, with $f for the file, e.g.
                            'signtool.exe sign /fd sha256 /td sha256 /tr http://timestamp.example.org /f C:\keys\code.pfx /p secret $f'
                            Signs the installer, the uninstaller and DeskMediaCompanion.exe. Not needed: unsigned builds work.
@@ -28,7 +28,9 @@
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1
 .EXAMPLE
-  powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1 -SkipInstaller -ProjectUrl ''
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1 -SkipInstaller
+.EXAMPLE
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1 -ProjectUrl https://example.org/deskmedia
 #>
 [CmdletBinding()]
 param(
@@ -85,8 +87,7 @@ if ([int]$parts[0] -ne 3 -or [int]$parts[1] -lt 10) { throw "companion\.venv has
 Invoke-Tool $py @('-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', '-r', (Join-Path $companion 'requirements.txt'),
                   '-r', (Join-Path $companion 'requirements-build.txt'))
 if (-not (Select-String -Path (Join-Path $companion 'requirements.txt') -Pattern '^\s*pyserial' -Quiet)) {
-    Write-Host 'pyserial is not in requirements.txt yet: installing it for the build anyway (the USB link needs it)'
-    Invoke-Tool $py @('-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', 'pyserial>=3.5')
+    throw 'companion\requirements.txt does not list pyserial: the USB link (usblink.py) cannot be packaged without it.'
 }
 
 if ($RunTests) {

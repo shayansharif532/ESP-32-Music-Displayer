@@ -60,19 +60,23 @@ hiddenimports += ["PIL.ImageTk", "PIL._tkinter_finder"]
 # tkinter (the settings / pairing windows): PyInstaller's own hook bundles Tcl / Tk and their script libraries.
 hiddenimports += ["tkinter", "tkinter.ttk", "tkinter.filedialog", "tkinter.messagebox", "tkinter.colorchooser"]
 
-# pyserial (the USB link): included when it is installed; list_ports_windows is picked by pyserial at run time.
-if find_spec("serial") is not None:
-    hiddenimports += ["serial", "serial.serialutil", "serial.serialwin32", "serial.win32", "serial.tools",
-                      "serial.tools.list_ports", "serial.tools.list_ports_common", "serial.tools.list_ports_windows"]
+# pyserial (the USB link, usblink.py - the product's primary transport): required. pyserial picks list_ports_windows at run time, and
+# usblink names it in a conditional import, so list it here as well.
+if find_spec("serial") is None:
+    raise SystemExit("pyserial is not installed in the build environment (companion\\requirements.txt): the USB link cannot be packaged without it")
+hiddenimports += ["serial", "serial.serialutil", "serial.serialwin32", "serial.win32", "serial.tools",
+                  "serial.tools.list_ports", "serial.tools.list_ports_common", "serial.tools.list_ports_windows"]
 
 # Package metadata (the dist-info folders) so that importlib.metadata - and --selftest - can report the bundled versions.
 for dist in ("pycaw", "pystray", "winrt-runtime", "comtypes", "pyserial", "pillow", "psutil"):
     try:
         datas += copy_metadata(dist)
-    except Exception:                       # not installed (e.g. pyserial before the USB link exists): nothing to bundle
+    except Exception:                       # no metadata for it: only the version report in --selftest is poorer
         pass
 
-# Data files of the application: the assets folder (fonts for the idle screen) exists only once a feature adds it.
+# Data files of the application: desk_media_companion/assets (Montserrat-Medium.ttf for the idle-screen preview, with its licence text),
+# found at run time through desk_media_companion/resources.py (sys._MEIPASS\desk_media_companion\assets). Optional for the BUILD, so a
+# source tree without the folder still builds; tools\build_release.ps1 verifies that every file of the folder made it into the app.
 assets = os.path.join(PACKAGE_DIR, "assets")
 if os.path.isdir(assets) and os.listdir(assets):
     datas.append((assets, os.path.join("desk_media_companion", "assets")))

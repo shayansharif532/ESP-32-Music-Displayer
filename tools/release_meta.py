@@ -133,10 +133,12 @@ def write(path: str, text: str) -> None:
         f.write(text)
 
 
-def generate(project_url: str | None = None) -> tuple[str, str]:
+def generate(project_url: str = "") -> tuple[str, str]:
+    """`project_url`: '' = none (the default: a repository URL carries its owner's account name, which is the project owner's call,
+    not the build's), 'origin' = the https URL of the `origin` remote, anything else = that URL."""
     version = read_version()
     year = commit_year()
-    url = default_project_url() if project_url is None else project_url
+    url = default_project_url() if project_url == "origin" else project_url
     write(VERSION_INFO, version_info_text(version, year))
     os.makedirs(os.path.dirname(VERSION_ISS), exist_ok=True)
     write(VERSION_ISS, version_iss_text(version, year, url))
@@ -145,13 +147,16 @@ def generate(project_url: str | None = None) -> tuple[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--project-url", default=None, help="home page shown in Programs and Features ('' = none; default: the origin remote on GitHub)")
+    ap.add_argument("--project-url", default="", help="home page shown in Programs and Features: a URL, 'origin' (the GitHub URL of the origin "
+                                                       "remote) or '' (the default: none)")
     ap.add_argument("--print-version", action="store_true", help="only print the version")
     args = ap.parse_args(argv)
     if args.print_version:
         print(read_version())
         return 0
     version, url = generate(args.project_url)
+    if args.project_url == "origin" and not url:
+        print("note: the origin remote is not a GitHub https/ssh URL: no project URL")
     print(f"version {version} -> {os.path.relpath(VERSION_INFO, ROOT)}, {os.path.relpath(VERSION_ISS, ROOT)}" + (f" (url {url})" if url else " (no url)"))
     return 0
 

@@ -2,25 +2,28 @@
 
 Proves, on a machine without Python or any developer tool, that everything the companion needs at run time was bundled and loads:
 the WinRT media-session projection, Core Audio (pycaw / comtypes), Pillow (including its JPEG encoder), psutil, pystray, tkinter / Tcl,
-pyserial's port enumeration, the application's own modules (every module of the package is imported, so a forgotten hidden import
-shows up here) and the DPAPI-protected pairing store.
+the USB link (DMLINK framing against the test vectors of docs/usb-protocol.md section 10, pyserial's port enumeration - also with
+zero ports), the bundled idle-screen font and the idle-screen preview with the date, the application's own modules (every module of the
+package is imported, so a forgotten hidden import shows up here), the settings store and the DPAPI-protected pairing store.
 
 It prints exactly ONE JSON line and exits 0 (all checks ok) or 1:
 
-    {"selftest": "DeskMediaCompanion", "ok": true, "version": "0.1.0", "frozen": true, "checks": {"pillow": {"ok": true, "detail": "..."}, ...}, ...}
+    {"selftest": "DeskMediaCompanion", "ok": true, "version": "1.0.0", "frozen": true, "checks": {"pillow": {"ok": true, "detail": "..."}, ...}, ...}
 
 When the process has no stdout (the windowless exe) the same line is also written to %TEMP%\\deskmedia-selftest.json.
 
-What it never does: open a window, bind a socket, open a serial port (comports() only lists), start the media monitor, change
-the auto-start entry, or touch the real data directory (the pairing store and the idle-screen store are exercised in a throw-away
-temporary directory that is deleted again). It does read two things from the machine: the number of media sessions (a read-only
-WinRT call) and the number of audio devices (a read-only Core Audio call), and it reports counts only, never titles or names.
+What it never does: open a window, bind a socket, open a serial port (comports() only lists), start the media monitor or the USB
+link, change the auto-start entry, or touch the real data directory (the pairing, settings and idle-screen stores are exercised in a
+throw-away temporary directory that is deleted again). It does read three things from the machine: the number of media sessions (a
+read-only WinRT call), the number of audio devices (a read-only Core Audio call) and the number of serial ports Windows lists (a
+SetupAPI enumeration); it reports counts only, never titles or names.
 
-Checks that cannot apply yet report {"ok": true, "status": "absent"} (e.g. the USB-link modules before they exist); a missing
-runtime dependency, an import error or a wrong result is {"ok": false, "reason": "..."}.
+A missing runtime dependency, a missing bundled file, an import error or a wrong result is {"ok": false, "reason": "..."}; a check
+that cannot apply on this machine says {"ok": true, "status": "..."}.
 """
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import os
@@ -35,7 +38,7 @@ from . import __version__
 
 NAME = "DeskMediaCompanion"
 RESULT_FILE = "deskmedia-selftest.json"       # in %TEMP%, written only when the process has no stdout
-OPTIONAL_MODULES = ("framing", "usblink", "api", "config")      # the USB-first modules: "absent" is fine until they exist
+REQUIRED_MODULES = ("framing", "usblink", "api", "config", "runtime", "resources", "idle_date", "idle_layout")    # the USB-first core
 THREAD_TIMEOUT_S = 25.0
 
 _results: dict[str, dict[str, Any]] = {}
@@ -218,9 +221,12 @@ def check_pystray() -> dict[str, Any]:
         raise RuntimeError(f"pystray picked the wrong backend: {pystray.Icon.__module__}")
     menu = pystray.Menu(pystray.MenuItem("x", lambda icon, item: None), pystray.Menu.SEPARATOR)
     pystray.Icon("selftest", Image.new("RGBA", (16, 16), (0, 0, 0, 255)), "selftest", menu)          # not run: no window, no tray icon
-    from . import ui
-    tray = ui.make_tray_icon_image()
-    if tray.size != (64, 64):
+    from . import ui                                # imports the UI module (tkinter / Pillow only: no window)
+    make_image = getattr(ui, "make_tray_icon_image", None)
+    if make_image is None:
+        return {"detail": "backend pystray._win32 (the UI module has no tray image function to try)"}
+    tray = make_image()
+    if tray.width < 16 or tray.width != tray.height:
         raise RuntimeError("the tray icon image has the wrong size")
     return {"detail": "backend pystray._win32, tray icon image generated"}
 
@@ -244,16 +250,71 @@ def check_tkinter() -> dict[str, Any]:
 
 
 def check_serial() -> dict[str, Any]:
-    if not _find("serial"):
-        if _find(f"{__package__}.usblink"):
-            raise ImportError("pyserial is not bundled but the USB link module is")
-        return {"status": "absent", "detail": "pyserial is not part of this build"}
+    """pyserial and the port enumeration the USB link scans with - on this machine and with zero ports. No port is ever opened."""
     import serial
     import serial.tools.list_ports
-    import serial.tools.list_ports_windows  # noqa: F401  (hidden import)
+    import serial.tools.list_ports_windows  # noqa: F401  (hidden import: list_ports picks it at run time)
+    from . import usblink
     _versions["pyserial"] = _module_version(serial, "VERSION", "__version__")
-    ports = list(serial.tools.list_ports.comports())            # enumerates; never opens a port
-    return {"detail": f"{len(ports)} serial port(s) enumerated, none opened"}
+    real = usblink.list_serial_ports()                           # exactly what the scanner calls: enumeration only
+    original = serial.tools.list_ports.comports
+    serial.tools.list_ports.comports = lambda *a, **k: []         # a PC with no serial port at all
+    try:
+        none = usblink.list_serial_ports()
+    finally:
+        serial.tools.list_ports.comports = original
+    if none != [] or usblink.select_ports(none) != [] or usblink.select_ports(none, "COM3") != []:
+        raise RuntimeError("zero serial ports were not handled")
+    sample = [usblink.PortInfo("COM1", None, None, "Communications Port"), usblink.PortInfo("COM7", usblink.USB_VID, usblink.USB_PID, "display")]
+    if usblink.select_ports(sample) != ["COM7"]:
+        raise RuntimeError("port selection by VID / PID is wrong")
+    if not hasattr(usblink, "PySerialPort") or not hasattr(serial, "Serial"):
+        raise RuntimeError("the serial port class is missing")
+    return {"detail": f"{len(real)} serial port(s) listed (none opened), zero-port case ok, VID/PID selection ok"}
+
+
+def check_framing() -> dict[str, Any]:
+    """DMLINK framing against the independent test vectors of docs/usb-protocol.md section 10, byte by byte through the parser."""
+    from . import framing as fr
+    if fr.crc16_ccitt(b"123456789") != 0x29B1 or fr.crc32(b"123456789") != 0xCBF43926:
+        raise RuntimeError("CRC check values are wrong")
+    vectors = {                                                  # the hex strings are copied from the specification
+        "ping": ("fa de 01 30 03 00 07 00 05 00 c9 f0 68 65 6c 6c 6f c0 c9 b3 e1", lambda: fr.encode_frame(fr.TYPE_PING, b"hello", msg_id=7)),
+        "request": ("fa de 01 10 03 00 01 00 11 00 11 76 47 45 54 20 2f 6e 6f 77 2d 70 6c 61 79 69 6e 67 0a 64 50 41 b9",
+                    lambda: fr.encode_request(1, "GET", "/now-playing")),
+        "response": ("fa de 01 11 03 00 01 00 11 00 70 ce c8 00 0b 00 00 00 7b 22 6f 6b 22 3a 74 72 75 65 7d 48 39 aa 33",
+                     lambda: fr.encode_response(1, 200, b'{"ok":true}')[0]),
+        "beacon": ("fa de 01 01 03 00 00 00 0f 00 c3 af 7b 22 76 22 3a 31 2c 22 61 70 69 22 3a 32 7d 2e 27 e7 37",
+                   lambda: fr.encode_frame(fr.TYPE_BEACON, b'{"v":1,"api":2}')),
+        "chunk1": ("fa de 01 11 01 00 09 00 09 00 29 4a c8 00 06 00 00 00 61 62 63 7a bc ca 83",
+                   lambda: fr.encode_response(9, 200, b"abcdef", max_payload=9)[0]),
+        "chunk2": ("fa de 01 11 02 01 09 00 03 00 53 c1 64 65 66 3d 27 ed b5",
+                   lambda: fr.encode_response(9, 200, b"abcdef", max_payload=9)[1]),
+        "pong": ("fa de 01 31 03 00 00 00 00 00 70 e6 50 85 17 b6", lambda: fr.encode_frame(fr.TYPE_PONG)),
+    }
+    stream = b""
+    for name, (hexstr, make) in vectors.items():
+        want = bytes.fromhex(hexstr)
+        if make() != want:
+            raise RuntimeError(f"vector {name}: the encoder's bytes differ from the specification")
+        stream += want
+    parser = fr.FrameParser()
+    frames = []
+    for b in stream:                                              # one byte at a time: the worst chopping a serial port can do
+        frames += parser.feed(bytes([b]))
+    if [f.type for f in frames] != [0x30, 0x10, 0x11, 0x01, 0x11, 0x11, 0x31] or frames[0].payload != b"hello" or frames[0].msg_id != 7:
+        raise RuntimeError("the parser did not return the vectors' frames")
+    flipped = bytearray(bytes.fromhex(vectors["ping"][0]))
+    flipped[14] ^= 0x01                                           # a payload byte: the specification's resynchronisation case
+    after = fr.FrameParser().feed(b"boot banner\r\n" + bytes(flipped) + bytes.fromhex(vectors["ping"][0]))
+    if len(after) != 1 or after[0].payload != b"hello":
+        raise RuntimeError("the parser did not resynchronise after a corrupted frame")
+    body = bytes(range(256)) * 40                                 # 10 KB: a multi-chunk response and back
+    chunks = fr.FrameParser().feed(b"".join(fr.encode_response(5, 200, body)))
+    status, total, first = fr.split_response_head(chunks[0].payload)
+    if len(chunks) < 3 or status != 200 or total != len(body) or first + b"".join(c.payload for c in chunks[1:]) != body:
+        raise RuntimeError("a chunked response did not round-trip")
+    return {"detail": f"CRC check values, {len(vectors)} specification vectors, byte-wise parsing, resync, {len(chunks)}-chunk round trip"}
 
 
 def check_package() -> dict[str, Any]:
@@ -276,30 +337,43 @@ def check_package() -> dict[str, Any]:
     return {"detail": f"{len(names)} modules imported"}
 
 
-def check_optional_modules() -> dict[str, Any]:
-    state = {}
-    for n in OPTIONAL_MODULES:
-        state[n] = "ok" if _find(f"{__package__}.{n}") else "absent"
-    return {"detail": " ".join(f"{k}={v}" for k, v in state.items()), "modules": state}
+def check_link_modules() -> dict[str, Any]:
+    """The USB-first core must be in the build: present and importable (check_package imports them too; this one names them)."""
+    import importlib
+    missing = [n for n in REQUIRED_MODULES if not _find(f"{__package__}.{n}")]
+    if missing:
+        raise ImportError("not in this build: " + ", ".join(missing))
+    for n in REQUIRED_MODULES:
+        importlib.import_module(f"{__package__}.{n}")
+    return {"detail": ", ".join(REQUIRED_MODULES)}
 
 
 def check_assets() -> dict[str, Any]:
-    """The bundled data files (fonts for the idle screen): every file of the assets folder can be read; fonts load."""
-    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-    if not os.path.isdir(folder):
-        return {"status": "absent", "detail": "no assets folder in this build"}
-    files = sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
-    if not files:
-        raise RuntimeError("the assets folder is empty")
+    """The bundled data files, found the way the application finds them (resources.resource_path): the idle screen's typeface loads
+    and is really the one in use (idle.py silently falls back to a stand-in font when the file is missing), its licence text is
+    there, and every file of the assets folder is readable."""
     from PIL import ImageFont
+    from .resources import resource_path
+    font_file = resource_path("Montserrat-Medium.ttf")
+    folder = os.path.dirname(font_file)
+    if not os.path.isfile(font_file):
+        raise FileNotFoundError(f"Montserrat-Medium.ttf is not bundled (looked in {os.path.basename(os.path.dirname(folder))}/{os.path.basename(folder)})")
+    font = ImageFont.truetype(font_file, 40)
+    family = font.getname()[0]
+    if family != "Montserrat" or font.getlength("12:34") <= 0:
+        raise RuntimeError(f"the bundled font is not Montserrat ({family})")
+    if not os.path.isfile(resource_path("OFL-1.1-Montserrat.txt")):
+        raise FileNotFoundError("the font's licence text (OFL-1.1-Montserrat.txt) is not bundled")
+    files = sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
     for f in files:
-        path = os.path.join(folder, f)
-        if os.path.getsize(path) == 0:
-            raise RuntimeError(f"{f} is empty")
-        if f.lower().endswith((".ttf", ".otf")):
-            if ImageFont.truetype(path, 24).getlength("12:34") <= 0:
-                raise RuntimeError(f"{f} has no glyph metrics")
-    return {"detail": f"{len(files)} file(s): {', '.join(files)}"[:200]}
+        with open(os.path.join(folder, f), "rb") as fh:
+            if not fh.read(16):
+                raise RuntimeError(f"{f} is empty")
+    from . import idle
+    used = getattr(idle, "_montserrat", None)
+    if used is not None and used(24).getname()[0] != "Montserrat":
+        raise RuntimeError("the idle screen uses its stand-in font instead of Montserrat")
+    return {"detail": f"{len(files)} file(s): {', '.join(files)}; Montserrat Medium loads and is the idle screen's font"[:200]}
 
 
 def check_data_stores() -> dict[str, Any]:
@@ -337,7 +411,35 @@ def check_data_stores() -> dict[str, Any]:
         preview = idle.render_preview(istore.settings(), jpeg, 120)
         if preview.size != (120, 120):
             raise RuntimeError("the idle-screen preview has the wrong size")
-        return {"detail": f"DPAPI round trip ok, idle settings persisted, picture {len(jpeg)} bytes, preview rendered"}
+
+        # the idle screen as the settings window draws it, with clock, date and a custom line, at the display's own 480 px
+        import datetime as dt
+        shown = dataclasses.replace(istore.settings(), theme="dark", show_clock=True, clock_24h=True, show_date=True,
+                                    date_format="mon_d_y", text="selftest")
+        boxes: dict = {}
+        full = idle.render_preview(shown, None, 480, now=dt.datetime(2026, 10, 13, 14, 5), boxes=boxes)
+        if full.size != (480, 480) or not all(k in boxes for k in ("clock", "date", "text")):
+            raise RuntimeError(f"the idle-screen preview lacks elements: {sorted(boxes)}")
+        for name in ("clock", "date"):
+            left, top, right, bottom = boxes[name]
+            if right - left < 60 or bottom - top < 10 or abs((left + right) / 2 - 240) > 30:
+                raise RuntimeError(f"the preview's {name} is not where the display puts it: {boxes[name]}")
+        if idle.format_date(2026, 10, 13, "mon_d_y") != "Oct 13, 2026" or idle.format_clock_ms(0, "dmy") != "01/01/1970":
+            raise RuntimeError("the date formatting is wrong")
+
+        from .config import SettingsStore
+        settings_dir = os.path.join(tmp, "data")
+        st = SettingsStore(settings_dir)
+        if st.get().usb_enabled is not True or st.get().lan_enabled is not False:
+            raise RuntimeError("unexpected default settings (USB on, LAN off expected)")
+        st.update(lan_enabled=True)
+        if SettingsStore(settings_dir).get().lan_enabled is not True:
+            raise RuntimeError("the application settings were not persisted")
+        from .runtime import describe_usb
+        if not describe_usb({"enabled": True, "state": "searching"}):
+            raise RuntimeError("no status text for the USB state")
+        return {"detail": f"DPAPI round trip ok, idle settings + settings persisted, picture {len(jpeg)} bytes, 480 px idle preview with "
+                          f"clock / date / text rendered"}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -361,9 +463,10 @@ CHECKS: list[tuple[str, Callable[[], Any]]] = [
     ("tkinter", check_tkinter),
     ("pyserial", check_serial),
     ("package_modules", check_package),
-    ("usb_modules", check_optional_modules),
-    ("assets", check_assets),
-    ("data_stores_dpapi", check_data_stores),
+    ("link_modules", check_link_modules),
+    ("usb_framing_vectors", check_framing),
+    ("assets_font", check_assets),
+    ("data_stores_dpapi_idle_preview", check_data_stores),
     ("autostart_command", check_autostart),
 ]
 
