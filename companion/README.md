@@ -44,7 +44,7 @@ A display pairs with exactly one companion, once. Open the tray menu, choose **P
 the display and on the PC and confirm on both ends. Afterwards every request from the display is signed and the companion refuses
 unsigned requests from the network (requests from the PC itself are exempt). **Forget paired display** in the tray menu revokes the
 display at once; pairing again replaces it. Over USB the pairing window opens by itself (120 s) when an unpaired display appears and nothing is paired yet
-(never when a display is already paired, and not again for 10 minutes after a cancel). Only one copy of the companion runs per Windows session (a second start exits);
+(never when a display is already paired, and not again for 10 minutes after a cancel or after "Forget paired display": that was the user's decision). Only one copy of the companion runs per Windows session (a second start exits);
 a LAN-only development instance (`--lan --no-usb --port N`) is limited to one per port instead. The full procedure and the cryptography are in
 [../docs/protocol.md](../docs/protocol.md); the USB transport is [../docs/usb-protocol.md](../docs/usb-protocol.md).
 

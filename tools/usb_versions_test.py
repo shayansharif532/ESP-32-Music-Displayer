@@ -23,6 +23,7 @@ import usb_harness as uh  # noqa: E402
 from PIL import Image, ImageChops, ImageStat  # noqa: E402
 
 import desk_media_companion.usblink as usblink  # noqa: E402
+import screenshot as shot_mod  # noqa: E402
 
 check, wait_for, LOGS = it.check, it.wait_for, it.LOGS
 USB_DIR = os.path.join(LOGS, "usb")
@@ -37,6 +38,22 @@ def close_to(img: Image.Image, reference_png: str, limit: float = 6.0) -> tuple[
     diff = ImageChops.difference(img.convert("RGB"), ref)
     mean = sum(ImageStat.Stat(diff).mean) / 3
     return mean <= limit, f"mean difference {mean:.2f}"
+
+
+def grab(board, comp, name: str):
+    """A screenshot asked for with a DEBUG frame straight from the link (an incompatible pair serves no route but /hello, so the usual
+    one-shot request that rides on the answers would never reach the display)."""
+    for _attempt in range(3):
+        mark = board.mark()
+        manager = comp.runtime._manager if comp.runtime else None
+        if manager is None or not manager.send_debug("screenshot"):
+            time.sleep(1.0)
+            continue
+        if board.wait(r"SHOT_BEGIN", mark, 12.0) and board.wait(r"SHOT_END", mark, 60.0):
+            out = os.path.join(LOGS, name)
+            if shot_mod.assemble([ln for _t, ln in board.since(mark)], out) == 0:
+                return Image.open(out).convert("RGB")
+    return None
 
 
 def main() -> int:
@@ -66,7 +83,7 @@ def main() -> int:
             check(f"{name}: the companion reports the pair as incompatible", ok, f"state {st.get('state')}")
             check(f"{name}: and names the side that must be updated", st.get("update_needed") == update_needed, str(st.get("update_needed")))
             time.sleep(3.0)
-            img = board.screenshot(comp.monitor, f"usb-versions-{update_needed}.png")
+            img = grab(board, comp, f"usb-versions-{update_needed}.png")
             if img is None:
                 check(f"{name}: a screenshot of the display", False)
             else:

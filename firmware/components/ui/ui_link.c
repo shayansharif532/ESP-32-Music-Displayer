@@ -163,7 +163,7 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
         pair = ST_WARN;
         icon = LV_SYMBOL_WARNING;
         title = "Pair again";
-        body = "This display is not paired with this PC. A pairing window opens on your PC: confirm it there.";
+        body = "This display is not paired with this PC. Confirm the pairing on your PC. If no window appeared, right-click the DeskMedia icon near the clock and choose Pair a display.";
         break;
     case UI_LINK_UPDATE_COMPANION:
         comp = ST_WARN;

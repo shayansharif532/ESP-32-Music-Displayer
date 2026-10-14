@@ -28,7 +28,7 @@ the PC waking from sleep. You never choose a COM port.
 | Tray status says *The display's USB port is in use by another program* | Close the other program (Arduino / PlatformIO / PuTTY / `idf.py monitor`, another copy of the companion in another Windows session) or unplug and re-plug the display |
 | Tray status says *Display found, but not paired with this PC* | **Pair a display...** in the menu |
 | Tray status says *The display has a different pairing key* | **Forget paired display**, then pair again |
-| The pairing window never appears for an unpaired display | **Advanced > Pair a new display automatically** is off, or you cancelled a pairing a few minutes ago (it is not offered again for 10 minutes); use **Pair a display...** |
+| The pairing window never appears for an unpaired display | **Advanced > Pair a new display automatically** is off, or you cancelled a pairing or chose **Forget paired display** a few minutes ago (it is not offered again for 10 minutes: that was your decision); use **Pair a display...** |
 | Windows blocked the installer | *More info > Run anyway*; the installer is not code-signed |
 | A firewall prompt appeared | It should not in USB mode (the companion opens no port). It appears only if the optional Wi-Fi / LAN mode is switched on (**Advanced > Also connect over Wi-Fi (LAN)**) |
 | Nothing is shown while a video plays in a browser | The browser must publish a Windows media session (Chrome / Edge do; some embedded players do not) |

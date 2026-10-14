@@ -126,7 +126,7 @@ on the PC **and** a tap on the display. The differences are:
   new pairing is needed only when the display's storage is erased, the companion's data is reset, or the user chooses to re-pair.
 * **The pairing window opens by itself on USB.** When a display that is not paired with this PC appears on the cable and the
   companion has no paired display, the companion opens the 120 s window and shows its pairing dialog (a cancelled attempt is not
-  offered again for 10 minutes; the tray menu can always start one). `GET /hello` reports it as `"pairing":true`.
+  offered again for 10 minutes, and neither is a display after "Forget paired display", which is the user's decision; the tray menu can always start one). `GET /hello` reports it as `"pairing":true`.
 * **A session instead of signed requests.** The cable is point to point, so the per-request nonce/MAC of the LAN transport is not
   used. Instead the paired display and the companion prove to each other, once per link, that they hold `K`:
 

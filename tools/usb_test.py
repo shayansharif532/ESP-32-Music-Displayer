@@ -99,21 +99,25 @@ def main() -> int:
         # releasing the USB data lines from the firmware stranded the port, even with a system reset afterwards, until the cable was re-plugged.)
         resets0 = board.count(RESET_RX)
 
-        print("\n== 4. the pairing is forgotten on the PC: the display asks again, the window opens by itself")
+        print("\n== 4. the pairing is forgotten on the PC (the user's decision): the display asks again, nothing pairs behind the user's back")
         mark = board.mark()
         n_events = len(events)
         comp.pairing.forget()
         ok = wait_for(lambda: board.find(r"pairing lost|status 7", mark) is not None, 30.0, 0.2)
         check("4 the display says the pairing is lost", ok)
-        ok = wait_for(lambda: any(e.get("type") == "pair-request" for e in events[n_events:]) or comp.pairing.window_open, 30.0, 0.2)
-        check("4 the companion opens the pairing window by itself", ok)
-        check("4 and the display pairs again", uh.ensure_paired(board, comp))
+        time.sleep(8.0)
+        check("4 the companion does NOT open a pairing window by itself after the user forgot the pairing (offered again only on request)",
+              not comp.pairing.window_open and not any(e.get("type") == "pair-request" for e in events[n_events:]))
+        comp.pairing.open_window()                                     # what the tray's "Pair a display..." does
+        check("4 and the display pairs again on request", uh.ensure_paired(board, comp))
         check("4 and is served", served(comp))
 
         print("\n== 5. health")
         counters = link_counters(comp)
-        bad = {k: v for k, v in counters.items() if k.startswith("parser_") and k not in ("parser_frames",) and v}
-        check("5 no malformed frames on the cable in normal operation", not bad, str(bad))
+        damage = ("parser_bad_hcrc", "parser_bad_len", "parser_bad_crc", "parser_unknown_ver", "parser_overflow_dropped", "parser_callback_errors",
+                  "parser_internal_errors")                              # (noise bytes are not damage: they are the boot text of the display's reboot)
+        bad = {k: counters.get(k, 0) for k in damage if counters.get(k, 0)}
+        check("5 no damaged frames on the cable in normal operation (the display was rebooted once)", not bad, str(bad))
         health = [m for _t, m in board.since(0) if "health:" in m]
         if len(health) >= 2:
             def field(line, name):
