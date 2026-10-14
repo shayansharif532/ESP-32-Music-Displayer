@@ -27,7 +27,7 @@ Repository: [README.md](README.md).
 * **USB link protocol and product onboarding.** Replaced the LAN-only link with a USB-first one after measuring the board's USB capabilities (native USB-Serial/JTAG, CDC, no custom driver): a
   versioned, length-prefixed, double-checksummed frame protocol (DMLINK v1) with a resynchronising streaming parser, chunked responses up to 160 KB, presence beacons, duplicate suppression
   and a mutual challenge-response session bound to the pairing key ([docs/usb-protocol.md](docs/usb-protocol.md), test vectors checked on the PC and on the target); automatic COM-port discovery that
-  survives unplugging, reboots and restarts of either side; setup screens on the display (charge-only cable detection, QR code to the installer, pairing, update-needed cases); a per-user
+  survives unplugging, reboots and restarts of either side; setup screens on the display (charge-only cable detection, where to download the installer, pairing, update-needed cases); a per-user
   Windows installer with no administrator rights and no firewall prompt in USB mode; an independent security review whose findings (a JSON nesting stack overflow among them) were fixed
   ([docs/security.md](docs/security.md)).
 * **Image pipeline across PC and microcontroller.** Removed app logos structurally (Spotify's alpha composite is split by its alpha bands, never by

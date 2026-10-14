@@ -4,8 +4,8 @@ How to set up a machine, build and flash the firmware, run and package the Windo
 For the design see [architecture.md](architecture.md); for the board see [hardware.md](hardware.md).
 
 Contents: [Prerequisites](#prerequisites) · [Set up a new machine](#set-up-a-new-machine) · [Build and flash the firmware](#build-and-flash-the-firmware) ·
-[Serial console on the native USB port](#serial-console-on-the-native-usb-port) · [Run the companion](#run-the-windows-companion) ·
-[Package the companion](#package-the-companion-as-a-single-exe) · [Pair the display](#pair-the-display) · [Unit tests](#unit-tests) ·
+[Serial console on the native USB port](#the-native-usb-port-and-the-console) · [Run the companion](#run-the-windows-companion) ·
+[Package the companion](#package-the-companion-and-build-the-windows-installer) · [Pair the display](#pair-the-display) · [Unit tests](#unit-tests) ·
 [Board-in-the-loop test tools](#board-in-the-loop-and-developer-tools) · [Repository layout](#repository-layout) · [Conventions](#conventions) ·
 [Secrets](#secrets) · [Troubleshooting](#troubleshooting)
 
@@ -84,7 +84,7 @@ Build options (CMake cache variables):
 | `-DAPP_DEV_TOOLS=1` | Dev-only: screenshot dump, simulated touches / key presses, `reboot`, the on-target self-tests and a USB DEBUG-frame channel for the test tools. **Never ship a build with it** (`package_firmware.ps1` refuses an image that contains it) |
 | `-DAPP_NO_WIFI=1` | Ignore `firmware\secrets.local.h`: the product configuration even on a machine that has the file (what the USB tests use) |
 | `-DAPP_UI_DEMO=1` | UI development without any link: a scripted fake player |
-| `-DDM_SETUP_URL=... -DDM_SETUP_URL_SHORT=...` | Where the *Install DeskMedia Companion* screen's QR code points and how the address is printed (default: the project's GitHub releases page) |
+| `-DDM_SETUP_ADDRESS=...` | The address the *Install DeskMedia Companion* screen prints (default: the project's GitHub page, `github.com/shayansharif532/deskmedia-display`) |
 | `-DAPP_WIFI_SELFTEST=1` | Dev self-test (LAN mode): drops the Wi-Fi link once a minute after it comes up and logs how long the automatic reconnect takes |
 
 Example: `.\tools\idf.ps1 -DAPP_DEV_TOOLS=1 -DAPP_NO_WIFI=1 build` (the build the USB tests need).

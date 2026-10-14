@@ -210,7 +210,7 @@ one that sent the BEACON). `/now-playing` carries the PC's local date and time e
 | cable unplugged | the port read fails: closes, the display is "gone", scans every 2 s | no SOF for 3 ms: link down at once; after 6 s "no USB data" if it stays that way |
 | data-less cable (charge only) | nothing to see | the USB controller never sees a host: **"no USB data"** screen (section 8.1) |
 | replugged / display reboot | port reappears or a new `boot` in the BEACON: new link, session dropped | boots, beacons, handshakes again, no pairing |
-| companion not running / not installed | - | USB present but no ACK for 5 s: **"DeskMedia Companion not found"** with the install QR code; switches by itself when the companion starts |
+| companion not running / not installed | - | USB present but no ACK for 5 s: **"Install DeskMedia Companion"** with the project's GitHub address; switches by itself when the companion starts |
 | companion crash or restart | - | requests time out (3 s), link marked down after 6 s, then as above; reconnects without a reboot |
 | frame with a wrong CRC, bad header, oversize `LEN` | skipped, resynchronised, counted | same |
 | unknown `TYPE` or newer `VER` | ignored | ignored |

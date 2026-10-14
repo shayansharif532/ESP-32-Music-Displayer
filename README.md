@@ -1,15 +1,27 @@
 # DeskMedia Display
 A standalone ESP32-S3 touchscreen media display and controller for Windows.
 
+## Download for Windows
+
+**[Download DeskMedia Companion for Windows](https://github.com/shayansharif532/deskmedia-display/releases/latest)** - the latest release; under **Assets** pick `DeskMediaCompanion-Setup-1.0.0.exe`.
+
+> **Please do not download the source code.** Do not use the green **Code** button, **Download ZIP** or **Source code (zip)**: that is for
+> developers and it is not the app. The one installer file on the Releases page is all you need.
+
+1. **Plug the DeskMedia display** into a USB port of your Windows 10 / 11 PC (use a USB cable that carries data). The display says **Install DeskMedia Companion**.
+2. **Download and run the installer** from the link above. If Windows says "Windows protected your PC", click **More info**, then **Run anyway** (the installer is not code-signed yet).
+3. **Pair once.** The display and the PC show the same six-digit code. If they match, click **Pair** on the PC and tap **Pair** on the display.
+4. **Done.** From now on just plug it in: the companion starts with Windows and the display reconnects by itself. **No Wi-Fi is needed.**
+
+More detail: [First-time setup](#first-time-setup) and [Everyday use](#everyday-use).
+
+## What it is
+
 A small Windows companion reads the Windows Global System Media Transport Controls (GSMTC) and per-application audio sessions. The ESP32-S3
 display is plugged into the PC with a **USB cable**, is found automatically, follows whatever is playing, shows the artwork, title and
 progress on a 480x480 touchscreen, and sends your taps and swipes back as media commands. It works with Spotify, with Chrome / Edge / YouTube
 and with any other app that publishes a Windows media session. No Spotify account, OAuth or Premium subscription is needed, and **no Wi-Fi
 setup**: Wi-Fi / LAN is an optional fallback, off by default.
-
-**Set it up once, then just plug it in:** install the companion (a per-user Windows installer, no administrator rights, no Python), plug the
-display in, confirm a pairing code once; from then on the companion starts with Windows and the display reconnects by itself. See
-[First-time setup](#first-time-setup) and [Everyday use](#everyday-use).
 
 Platform: Windows 10 / 11 · Firmware: ESP-IDF 5.5.5, LVGL 9.5, C · Companion: Python 3.12 · Board: Waveshare ESP32-S3-Touch-LCD-4B
 
@@ -33,9 +45,9 @@ images and the two sources are silent mock sessions; nothing here comes from a r
 | ![The companion's idle screen settings window](docs/screenshots/idle-settings-window.png) | ![The pairing prompt](docs/screenshots/pairing-prompt.png) |
 | *The companion's tray Settings window, with a live preview* | *Pairing: the display and the PC show the same six-digit code; confirm on both* |
 
-<p align="center"><img src="docs/screenshots/setup-screens.jpg" alt="The seven setup screens of the display: No USB data, USB connected, Install DeskMedia Companion with a QR code, Pair with your PC, Pair again, Update DeskMedia Companion, Update the display" width="720"></p>
+<p align="center"><img src="docs/screenshots/setup-screens.jpg" alt="Four setup screens of the display: No USB data, USB connected, Pair with your PC, Update the display" width="480"></p>
 
-*What the display says before it is connected (a step strip at the top shows USB - Companion - Paired): charge-only cable, looking for the companion, install it (QR code and address), pair, pair again, and the two "update" cases. They disappear by themselves once the link works.*
+*Some of what the display says before it is connected (a step strip at the top shows USB - Companion - Paired): charge-only cable, looking for the companion, pair, and the firmware-update case. There are also screens for installing, updating and re-pairing the companion. They disappear by themselves once the link works.*
 
 ## Features
 
@@ -55,7 +67,7 @@ images and the two sources are silent mock sessions; nothing here comes from a r
 * **Persistent idle image and settings** (NVS plus a dedicated flash partition): they survive reboots of the display, the companion and Windows.
 * **USB-first connection**: the display talks to the companion over the USB cable (a standard serial port, Windows' own driver, no setup).
   The COM port is found automatically, also after unplugging, a reboot of either side or a new USB port ([docs/usb-protocol.md](docs/usb-protocol.md)).
-* **Guided first-time setup on the display itself**: *USB connected / No USB data / Install DeskMedia Companion (QR code) / Pair with your PC*,
+* **Guided first-time setup on the display itself**: *USB connected / No USB data / Install DeskMedia Companion (it names the project's GitHub page, whose Releases hold the installer) / Pair with your PC*,
   switching to the player by itself once everything is ready; a charge-only cable is recognised.
 * **Secure pairing, once**: a six-digit code confirmed on both ends, then every request is signed and the pairing is remembered on both sides
   ([docs/protocol.md](docs/protocol.md), [docs/security.md](docs/security.md)).
@@ -172,15 +184,15 @@ player back at once.
 
 ## First-time setup
 
-For somebody who has been handed a display (a Windows 10 / 11 PC, 64-bit; no Python, no administrator account and no Wi-Fi setup needed;
+For somebody who has been handed a display (a Windows 10 / 11 PC, 64-bit; no Python, no administrator account, no Wi-Fi setup and no source code needed;
 the longer version with every screen of the display is in [docs/installation.md](docs/installation.md)):
 
-1. **Install the companion.** Run `DeskMediaCompanion-Setup-<version>.exe` (it installs just for you; Windows may say "protected your PC":
-   *More info > Run anyway*, the installer is not code-signed). Leave *Start with Windows* ticked and finish with *Start now*; a small icon
-   appears next to the clock.
-2. **Plug the display into a USB port of the PC** with a data cable. It is found automatically. Until everything is ready it tells you what is
+1. **Plug the display into a USB port of the PC** with a data cable. It is found automatically. Until everything is ready it tells you what is
    missing: *No USB data* (charge-only cable or no PC: use a data cable or the board's other USB-C connector), *Install DeskMedia
-   Companion* (QR code and address: install step 1), *Pair with your PC*.
+   Companion* (step 2), *Pair with your PC* (step 3).
+2. **Install the companion.** Open the project's [Releases page](https://github.com/shayansharif532/deskmedia-display/releases/latest) and download `DeskMediaCompanion-Setup-1.0.0.exe` (the display prints the same
+   address). Run it: it installs just for you; if Windows says "protected your PC", click *More info > Run anyway* (the installer is not code-signed). Leave *Start with Windows*
+   ticked and finish with *Start now*; a small icon appears next to the clock.
 3. **Pair once.** The display and a window on the PC show the same six-digit code. If they match, confirm on the PC (**Pair**) and on the
    display. This is remembered on both sides.
 4. **Done.** Play something: title, artist, artwork and progress appear; taps, swipes and the side buttons control the player.
@@ -227,8 +239,8 @@ for the byte-level protocols. No credentials of any online service exist anywher
   on and the companion running (it starts with Windows).
 * **The optional Wi-Fi / LAN mode is a developer fallback and is not re-verified after the USB changes** (see Project status): Wi-Fi credentials are compile-time configuration (`firmware/secrets.local.h`), there is no
   provisioning portal, and the LAN API is authenticated but not encrypted (plain HTTP).
-* **The installer is not code-signed** (Windows SmartScreen asks once), and the *Install DeskMedia Companion* screen's QR code points to a
-  project-defined address (`DM_SETUP_URL`) that the person handing out displays has to provide ([docs/installation.md](docs/installation.md)).
+* **The installer is not code-signed** (Windows SmartScreen asks once). The *Install DeskMedia Companion* screen prints the project's GitHub address
+  (`DM_SETUP_ADDRESS`, changeable at build time; [docs/installation.md](docs/installation.md)).
 * Shuffle / repeat exist for the Spotify desktop app only (the web player is just a browser tab to Windows).
 
 ## Project status

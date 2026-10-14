@@ -123,7 +123,7 @@ flowchart LR
 | `usb_link` | `components/usb_link/` | The display's end of DMLINK v1: `dmlink.c` (pure C codec, self-tested on target against the spec's vectors) and `usb_link.c` (USB-Serial/JTAG driver, rx / tx tasks, presence beacons, request / response exchange with chunking, the firmware-log mirror to the companion, charge-only detection) |
 | `wifi_mgr` | `components/wifi_mgr/` | Optional: station Wi-Fi, exponential-backoff reconnect (1, 2, 4, 8, 15, then every 30 s), SNTP, credentials kept in RAM only, nothing sensitive logged |
 | `pc_media` | `components/pc_media/` | Chooses the transport (USB when the companion answers there, else LAN if Wi-Fi is configured), opens the authenticated USB session, polls `/now-playing` (time-scheduled, never starved by commands), downloads and decodes artwork (square or landscape, up to 432x320) into fixed PSRAM buffers, bakes the artwork-derived background, queues commands (volume and source commands coalesced), syncs the idle-screen settings, reports the link status including the setup steps; `pc_auth.c` holds the display's persistent identity and the pairing key |
-| `ui` | `components/ui/` | The LVGL player screen: square cover or landscape card with the text following it, progress line with seeking, transport buttons, Spotify-only shuffle / repeat buttons, swipe gestures, transient pill (source name with position dots, or "Volume 65%"); `ui_link.c` is the setup overlay (step strip, QR code); thread-safe `ui_*` API; callbacks only enqueue |
+| `ui` | `components/ui/` | The LVGL player screen: square cover or landscape card with the text following it, progress line with seeking, transport buttons, Spotify-only shuffle / repeat buttons, swipe gestures, transient pill (source name with position dots, or "Volume 65%"); `ui_link.c` is the setup overlay (step strip, message, the project's address on the install / update screens); thread-safe `ui_*` API; callbacks only enqueue |
 | `idle_screen` | `components/idle_screen/` | The idle screen (its own LVGL screen): four themes, big clock (generated font), date (`idle_date.c`), custom line, photo background; keeps the settings in NVS and the picture in the `idle_img` partition; syncs from the companion only when the version changed; the date follows the PC's local time sent with every answer, so it rolls over at midnight without help |
 | `side_keys` | `components/side_keys/` | The two side buttons as volume down / up: BOOT (GPIO0) and PWR (AXP2101 key flags polled over I2C), debounce, hold-repeat capped at 3 s |
 
@@ -163,7 +163,7 @@ stateDiagram-v2
     NO_USB_DATA --> USB_CONNECTED: data appears
     USB_CONNECTED: USB CONNECTED<br/>looking for the companion
     USB_CONNECTED --> COMPANION_MISSING: no ACK within 5 s
-    COMPANION_MISSING: INSTALL COMPANION<br/>QR code + address
+    COMPANION_MISSING: INSTALL COMPANION<br/>GitHub address, click Releases
     COMPANION_MISSING --> USB_CONNECTED: a beacon is answered
     USB_CONNECTED --> PAIRING: companion found, display not paired
     PAIRING: PAIRING<br/>code on both ends
@@ -302,7 +302,7 @@ display then follows `playing` and shows no clock.
 |---|---|
 | USB cable unplugged from the PC, or the PC is off | after the grace period *No USB data*; when data returns the display connects again by itself |
 | Charge-only cable | *No USB data* (the controller reports no host while only power is present) |
-| Companion not installed / not running | *USB connected*, then after 5 s *Install DeskMedia Companion* with a QR code; switches to the player by itself when the companion starts |
+| Companion not installed / not running | *USB connected*, then after 5 s *Install DeskMedia Companion* with the project's GitHub address; switches to the player by itself when the companion starts |
 | Companion restarted or crashed, PC asleep | the last track stays, status "Can't reach your PC" (on the idle screen: "Reconnecting to your PC..."); found again automatically |
 | Corrupt or partial USB frames, a disconnect in the middle of a message | the parser drops one byte and resynchronises; the exchange is retried; no reboot, no state loss |
 | Wi-Fi down / reconnecting (LAN mode only) | status "Connecting to Wi-Fi..." (auto-reconnect with back-off 1 -> 30 s); re-discovers if the PC's IP changes |

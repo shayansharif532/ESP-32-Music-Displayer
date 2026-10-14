@@ -65,4 +65,5 @@ Not tested: flashing from a web browser (esptool-js) with the same three files a
    for a protocol change (see above).
 2. `tools\build_release.ps1` builds the exe and the installer, `tools\package_firmware.ps1` the firmware files; run the automated tests and the
    board tests ([development.md](development.md)).
-3. Publish the installer and the firmware files together at the address the display's QR code points to (`DM_SETUP_URL`).
+3. Publish the installer (`DeskMediaCompanion-Setup-<version>.exe`) as the asset of a GitHub Release (tag `v<version>`), with the notes from `docs/release-notes-<version>.md`, on the
+   project page whose address the display prints (`DM_SETUP_ADDRESS`); put the firmware files there too when they changed.

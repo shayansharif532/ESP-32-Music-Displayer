@@ -31,10 +31,10 @@ Do them in this order; each takes a few minutes.
    one this product uses); the other (a serial bridge) shows **No USB data**. Note which one is which on your enclosure.
 4. **First-time setup as a recipient would do it.** On a Windows account that has never seen the companion (or after uninstalling it and deleting
    `%LOCALAPPDATA%\DeskMediaCompanion`): plug the display in **before** installing anything. *Pass:* **No USB data** is not shown (a data cable), the display says
-   **Install DeskMedia Companion** with a QR code and an address; run the installer, accept the SmartScreen notice (the installer is unsigned: *More info > Run anyway*),
+   **Install DeskMedia Companion** with the project's GitHub address; download `DeskMediaCompanion-Setup-<version>.exe` from the Releases page and run it, accept the SmartScreen notice (the installer is unsigned: *More info > Run anyway*),
    leave *Start with Windows* ticked; the display switches to **Pair with your PC** by itself, a pairing window opens on the PC, compare the two codes, click **Pair** on the PC
-   and tap **Pair** on the display. Play something: title, artist and artwork appear. Note: the QR code currently points to the project's GitHub releases page, which is not reachable
-   while the repository is private (see the owner decisions below).
+   and tap **Pair** on the display. Play something: title, artist and artwork appear. Note: the Releases page is reachable by other people only while the repository is public (see the owner decisions
+   below); the new text of the install screen was not on the glass when this was written.
 5. **Everyday use.** Sign out and in again (or reboot the PC) with the display connected. *Pass:* the tray icon is back, the display reconnects within about ten seconds, no pairing prompt.
    Also try: PC sleep and wake; closing the companion (tray > **Exit**: the display says it cannot reach the PC, then **Install DeskMedia Companion** after about a minute) and starting it
    again from the Start menu (the display recovers by itself).
@@ -58,6 +58,6 @@ Wi-Fi start and the USB link, then run `DM_TEST_DATA_DIR=<folder paired over USB
 
 ## Decisions that are the project owner's
 
-* **Where the installer is published** and therefore what the *Install DeskMedia Companion* QR code points to (`DM_SETUP_URL`; the default is the project's GitHub releases page).
+* **When the repository becomes public and the v1.0.0 release is published**: until then the address the *Install DeskMedia Companion* screen prints leads nowhere for anyone else.
 * Code signing of the installer (it is unsigned now: SmartScreen asks once), a project licence, and whether to make the repository public.
 * Whether to ship a firmware flasher for recipients (today: `esptool` and three files, [updating.md](updating.md)).
