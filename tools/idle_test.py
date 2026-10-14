@@ -1079,6 +1079,7 @@ def main() -> int:
         board = Board(port)
         comp = Companion(os.path.join(data_dir, "idle"))
     try:
+        comp.store.reset()                                               # a kept data folder (DM_TEST_DATA_DIR) may hold the last run's theme / picture
         comp.store.update(delay_s=4, show_date=False)                    # the date line has its own phase; the others look at the clock only
         only = {x.strip() for x in args.only.split(",") if x.strip()}
         want = lambda name: (not only) or name in only
