@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-PY = os.path.join(ROOT, "companion", ".venv", "Scripts", "python.exe")
+PY = os.path.join(os.environ.get("DESK_VENV") or os.path.join(ROOT, "companion", ".venv"), "Scripts", "python.exe")      # DESK_VENV: a git worktree without its own venv
 FAKE = os.path.join(ROOT, "companion", "tools", "fake_media_session.py")
 COMPANION_LOG = os.path.join(os.environ.get("DESK_MEDIA_DATA_DIR") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "DeskMediaCompanion"), "companion.log")
 ACTION_WAIT_S = 3.4          # a debug action reaches the board with its next poll (<= 1 s), then the gesture itself takes ~1 s
@@ -176,6 +176,13 @@ def main() -> int:
     real_before = {a: s for a, s in states().items() if a != "python.exe"}
     print("real sessions before:", real_before)
     start_fake()
+    second = None
+    if len([a for a in session_apps() if a != "python.exe"]) < 1:           # no real session around (an isolated companion: --only-apps): a second silent fake plays "another app"
+        sys.path.insert(0, os.path.join(ROOT, "companion", "tools"))
+        import fakes
+        second = fakes.start_fake("deskfakeb.exe", paused=True, log_path=os.path.join(ROOT, "logs", "fake-session-b.log"))
+        wait_for(lambda: "deskfakeb.exe" in session_apps(), 15.0)
+        time.sleep(3.0)                                                      # the watcher and the snapshot settle on the new ring
     try:
         ring = [s["app"] for s in sources()["sources"]]
         names = [s["name"] for s in sources()["sources"]]
@@ -363,6 +370,9 @@ def main() -> int:
             check("three taps on repeat walk through all three modes and end where they began", sorted(seq) == [0, 1, 2] and seq[-1] == rp0, f"start {rp0}: {seq}")
     finally:
         stop_fake()
+        if second is not None:
+            import fakes
+            fakes.stop_fake(second)
         http("POST", "/control/source-auto")
     real_after = {a: s for a, s in states().items()}
     check("the real sessions' playback states are as before", all(real_after.get(a) == s for a, s in real_before.items()), f"{real_before} vs {real_after}")
