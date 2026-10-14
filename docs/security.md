@@ -1,4 +1,4 @@
-﻿# Security
+# Security
 
 DeskMedia Display connects a touchscreen to a PC, by default with a **USB cable** (no network service at all) and optionally over the local
 network. This page states what is protected, from whom, how, and what is deliberately **not** protected. The wire-level details of pairing and request

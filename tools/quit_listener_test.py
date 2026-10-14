@@ -1,4 +1,4 @@
-﻿"""Proves that a running DeskMediaCompanion.exe obeys `--quit` (what the installer uses to replace / remove a running copy) - with no
+"""Proves that a running DeskMediaCompanion.exe obeys `--quit` (what the installer uses to replace / remove a running copy) - with no
 HTTP port at all, as in the USB-first product, and also with the optional LAN transport on.
 
     companion\\.venv\\Scripts\\python.exe tools\\quit_listener_test.py [path\\to\\DeskMediaCompanion.exe]

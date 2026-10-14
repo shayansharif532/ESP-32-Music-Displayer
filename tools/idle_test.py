@@ -994,7 +994,8 @@ def phase_ring_soak(board: Board, comp: Companion, procs: dict, cycles: int) -> 
         first, last = stats[1], stats[-1]
         steady_first, steady_last = max(x[2] for x in stats[1:7]), max(x[2] for x in stats[-7:])
         check("10 internal heap returns to the same steady level (peak of the last samples)", steady_last >= steady_first - 2048, f"{steady_first} -> {steady_last} B")
-        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 60000, f"{first[3]} -> {last[3]} B")
+        # the floor is 40 KB: the USB link keeps about 30 KB of internal RAM (driver rings, tasks) that the Wi-Fi build did not, and a cover decode dips the mark by itself
+        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 40000, f"{first[3]} -> {last[3]} B")
         check("10 PSRAM did not leak", last[5] >= first[5] - 65536, f"{first[5]} -> {last[5]} B")
         check("10 LVGL stack headroom steady", last[6] >= 8000 and last[6] >= first[6] - 256, f"{first[6]} -> {last[6]} B")
         print(f"   health (first -> last): int_free {first[2]} -> {last[2]}, int_min {first[3]} -> {last[3]}, psram_free {first[5]} -> {last[5]}, lvgl_stack_min {first[6]} -> {last[6]}")
@@ -1033,7 +1034,7 @@ def phase_soak(board: Board, comp: Companion, cycles: int) -> None:
         check("10 uptime is continuous", [s[0] for s in stats] == sorted(s[0] for s in stats))
         steady_first, steady_last = max(x[2] for x in stats[1:7]), max(x[2] for x in stats[-7:])
         check("10 internal heap returns to the same steady level (peak of the last samples)", steady_last >= steady_first - 2048, f"{steady_first} -> {steady_last} B")
-        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 60000, f"{first[3]} -> {last[3]} B")
+        check("10 internal heap low-water mark stays above a safe floor (momentary dips when allocations coincide are normal)", last[3] >= 40000, f"{first[3]} -> {last[3]} B")
         check("10 PSRAM did not leak", last[5] >= first[5] - 65536, f"{first[5]} -> {last[5]} B")
         check("10 LVGL stack headroom steady and healthy", last[6] >= 8000 and last[6] >= first[6] - 256, f"{first[6]} -> {last[6]} B")
         if last[7]:
