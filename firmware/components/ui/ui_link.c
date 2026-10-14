@@ -2,10 +2,11 @@
  *
  * A full-screen child of the player screen (not a screen of its own: the player / idle switching in main.c and the pairing prompt keep
  * working unchanged, and the screenshot tool sees it). It swallows touches, so the hidden player controls beneath cannot be pressed. It
- * has three parts: a step strip ("USB - Companion - Paired") that shows how far the setup is, a message (icon or QR code, title, text),
- * and a hint. Built on first use; every call takes the LVGL lock itself.
+ * has three parts: a step strip ("USB - Companion - Paired") that shows how far the setup is, a message (icon, title, text), and a hint.
+ * Built on first use; every call takes the LVGL lock itself.
  *
- * The QR code carries the setup address (where the installer is); the same address is printed under it in short form.
+ * The two "get the PC app" screens (install, update) print the project's address (DM_SETUP_ADDRESS); the text tells the person to open it
+ * and click Releases. No QR code, no download from the display.
  */
 #include <stdio.h>
 #include <string.h>
@@ -23,17 +24,13 @@
 #define COL_WARN        0xFFB020
 #define COL_ACCENT      0x4DA3FF
 
-#define QR_CARD         208                                 /* white card behind the code (the code itself needs a quiet zone) */
-#define QR_SIZE         184
-
 typedef enum { ST_PENDING, ST_CURRENT, ST_WARN, ST_DONE } step_t;
 
 static struct {
-    lv_obj_t *root, *step[3], *icon, *title, *body, *card, *qr, *url, *name, *hint;
+    lv_obj_t *root, *step[3], *icon, *title, *body, *url, *name, *hint;
     bool built;
     bool visible;
     ui_link_kind_t kind;
-    char url_full[160];
 } k;
 
 static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, int32_t width)
@@ -71,19 +68,6 @@ static void build(lv_obj_t *player)
     k.name = label(k.root, &lv_font_montserrat_16, COL_HINT, 400);
     k.url = label(k.root, &lv_font_montserrat_20, COL_ACCENT, 440);
     k.hint = label(k.root, &lv_font_montserrat_14, COL_HINT, 420);
-
-    k.card = lv_obj_create(k.root);
-    lv_obj_remove_style_all(k.card);
-    lv_obj_set_size(k.card, QR_CARD, QR_CARD);
-    lv_obj_set_style_bg_color(k.card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(k.card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(k.card, 18, 0);
-    lv_obj_remove_flag(k.card, LV_OBJ_FLAG_SCROLLABLE);
-    k.qr = lv_qrcode_create(k.card);
-    lv_qrcode_set_size(k.qr, QR_SIZE);
-    lv_qrcode_set_dark_color(k.qr, lv_color_hex(0x101015));
-    lv_qrcode_set_light_color(k.qr, lv_color_white());
-    lv_obj_center(k.qr);
     k.built = true;
 }
 
@@ -109,7 +93,7 @@ void ui_link_init(lv_obj_t *player_screen)
     }
 }
 
-void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, const char *pc_name)
+void ui_link_show(ui_link_kind_t kind, const char *address, const char *pc_name)
 {
     if (!bsp_display_lock(1000)) {
         return;
@@ -118,14 +102,13 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
         bsp_display_unlock();
         return;
     }
-    const bool qr = kind == UI_LINK_COMPANION_MISSING || kind == UI_LINK_UPDATE_COMPANION;
-    if (k.visible && k.kind == kind && (!qr || (url && strcmp(k.url_full, url) == 0))) {
+    if (k.visible && k.kind == kind) {
         bsp_display_unlock();                               /* nothing changed: no redraw */
         return;
     }
     k.kind = kind;
     k.visible = true;
-    strlcpy(k.url_full, url ? url : "", sizeof k.url_full);
+    const bool get_app = kind == UI_LINK_COMPANION_MISSING || kind == UI_LINK_UPDATE_COMPANION;
 
     const char *icon = LV_SYMBOL_USB, *title = "", *body = "", *hint = "";
     uint32_t icon_col = COL_WARN;
@@ -146,8 +129,10 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
         break;
     case UI_LINK_COMPANION_MISSING:
         comp = ST_WARN;
+        icon = LV_SYMBOL_DOWNLOAD;
+        icon_col = COL_ACCENT;
         title = "Install DeskMedia Companion";
-        body = "Scan the code, or open the address below on your PC, and run the installer.";
+        body = "On your PC, open the address below, click Releases, download the Windows installer and run it.";
         hint = "Already installed? Start DeskMedia Companion from the Start menu.";
         break;
     case UI_LINK_PAIRING_WAIT:
@@ -167,8 +152,10 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
         break;
     case UI_LINK_UPDATE_COMPANION:
         comp = ST_WARN;
+        icon = LV_SYMBOL_DOWNLOAD;
+        icon_col = COL_ACCENT;
         title = "Update DeskMedia Companion";
-        body = "This display needs a newer version of the PC app. Get it at the address below.";
+        body = "This display needs a newer PC app. Open the address below, click Releases and run the latest installer.";
         break;
     case UI_LINK_UPDATE_FIRMWARE:
         comp = ST_WARN;
@@ -185,46 +172,32 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
     lv_label_set_text(k.body, body);
     lv_label_set_text(k.hint, hint);
     lv_label_set_text(k.name, (pc_name && pc_name[0] && kind == UI_LINK_PAIRING_WAIT) ? pc_name : "");
-    lv_label_set_text(k.url, url_short ? url_short : "");
+    lv_label_set_text(k.url, (get_app && address) ? address : "");
     lv_obj_set_style_text_color(k.icon, lv_color_hex(icon_col), 0);
     lv_label_set_text(k.icon, icon);
 
-    /* the QR screens carry the longest titles ("Install DeskMedia Companion"): a smaller font keeps them on one line */
-    lv_obj_set_style_text_font(k.title, qr ? &lv_font_montserrat_24 : &lv_font_montserrat_32, 0);
-    lv_obj_set_style_text_font(k.url, (url_short && strlen(url_short) > 30) ? &lv_font_montserrat_16 : &lv_font_montserrat_20, 0);
+    /* the "get the PC app" screens carry the longest titles ("Install DeskMedia Companion"): a smaller font keeps them on one line; the
+     * address ("github.com/<owner>/<repo>") is printed small enough to stay on one line too */
+    lv_obj_set_style_text_font(k.title, get_app ? &lv_font_montserrat_24 : &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(k.url, &lv_font_montserrat_16, 0);
 
-    if (qr) {                                               /* title, text, the code on a white card, the short address, a hint */
-        lv_obj_add_flag(k.icon, LV_OBJ_FLAG_HIDDEN);
-        place(k.title, 62);
-        place(k.body, 100);
-        lv_obj_align(k.card, LV_ALIGN_TOP_MID, 0, 178);
-        lv_obj_remove_flag(k.card, LV_OBJ_FLAG_HIDDEN);
-        if (lv_qrcode_update(k.qr, k.url_full, (uint32_t)strlen(k.url_full)) != LV_RESULT_OK) {
-            lv_obj_add_flag(k.card, LV_OBJ_FLAG_HIDDEN);    /* the address does not fit a code: the printed address still works */
-        }
-        place(k.url, 396);
-        if (hint[0]) {
-            place(k.hint, 434);
-        } else {
-            lv_obj_add_flag(k.hint, LV_OBJ_FLAG_HIDDEN);
-        }
-        lv_obj_add_flag(k.name, LV_OBJ_FLAG_HIDDEN);
-    } else {                                                /* icon, title, text, hint */
-        lv_obj_add_flag(k.card, LV_OBJ_FLAG_HIDDEN);
+    place(k.icon, get_app ? 80 : 92);                       /* icon, title, text, (address), (PC name), hint */
+    place(k.title, get_app ? 150 : 164);
+    place(k.body, get_app ? 194 : 218);
+    if (get_app) {
+        place(k.url, 306);
+    } else {
         lv_obj_add_flag(k.url, LV_OBJ_FLAG_HIDDEN);
-        place(k.icon, 92);
-        place(k.title, 164);
-        place(k.body, 218);
-        if (k.name && pc_name && pc_name[0] && kind == UI_LINK_PAIRING_WAIT) {
-            place(k.name, 330);
-        } else {
-            lv_obj_add_flag(k.name, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (hint[0]) {
-            place(k.hint, 424);
-        } else {
-            lv_obj_add_flag(k.hint, LV_OBJ_FLAG_HIDDEN);
-        }
+    }
+    if (k.name && pc_name && pc_name[0] && kind == UI_LINK_PAIRING_WAIT) {
+        place(k.name, 330);
+    } else {
+        lv_obj_add_flag(k.name, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (hint[0]) {
+        place(k.hint, 424);
+    } else {
+        lv_obj_add_flag(k.hint, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_remove_flag(k.root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(k.root);

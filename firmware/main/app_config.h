@@ -23,14 +23,10 @@
 #define DEV_COMPANION_HOST      ""
 #endif
 
-/* Where the on-screen "install DeskMedia Companion" message points (encoded as a QR code; the short form is printed under it). The
- * build can override both: idf.py -DDM_SETUP_URL=\"https://example.org/setup\" -DDM_SETUP_URL_SHORT=\"example.org/setup\" (see docs/installation.md).
- * The default is the project's releases page, where the installer is published. */
-#ifndef DM_SETUP_URL
-#define DM_SETUP_URL            "https://github.com/shayansharif532/deskmedia-display/releases/latest"
-#endif
-#ifndef DM_SETUP_URL_SHORT
-#define DM_SETUP_URL_SHORT      "github.com/shayansharif532/deskmedia-display"
+/* The address the on-screen "install DeskMedia Companion" message prints: the project's GitHub page, whose Releases hold the Windows
+ * installer. A fork can override it: idf.py -DDM_SETUP_ADDRESS=\"example.org/deskmedia\" (see docs/installation.md). */
+#ifndef DM_SETUP_ADDRESS
+#define DM_SETUP_ADDRESS        "github.com/shayansharif532/deskmedia-display"
 #endif
 
 /* LVGL runs on core 1, leaving core 0 to Wi-Fi/lwIP and our network tasks. */

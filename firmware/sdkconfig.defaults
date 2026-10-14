@@ -64,8 +64,6 @@ CONFIG_LV_FONT_MONTSERRAT_32=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_FONT_COMPRESSED=y
 CONFIG_LV_USE_IMGFONT=y
-# QR code of the on-screen setup message (components/ui/ui_link.c)
-CONFIG_LV_USE_QRCODE=y
 
 # Waveshare BSP: LVGL partial-render buffer height (rows). 50 rows = 48 KB of internal RAM (BSP default is 100).
 CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=50

@@ -270,7 +270,7 @@ static void link_overlay(ui_link_kind_t kind, const char *pc_name)
     s_last_playing_ms = 0;
     s_peek_until = 0;
     ui_show_idle("", "");                                    /* nothing of a previous track shows through */
-    ui_link_show(kind, DM_SETUP_URL, DM_SETUP_URL_SHORT, pc_name);
+    ui_link_show(kind, DM_SETUP_ADDRESS, pc_name);
     show_screen(false);
 }
 

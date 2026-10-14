@@ -17,13 +17,10 @@ if(APP_UI_DEMO)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE APP_UI_DEMO=1)
 endif()
 
-# Where the "install DeskMedia Companion" screen points (see app_config.h):
-#   idf.py -DDM_SETUP_URL=https://example.org/setup -DDM_SETUP_URL_SHORT=example.org/setup build
-if(DM_SETUP_URL)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DM_SETUP_URL="${DM_SETUP_URL}")
-endif()
-if(DM_SETUP_URL_SHORT)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DM_SETUP_URL_SHORT="${DM_SETUP_URL_SHORT}")
+# The address the "install DeskMedia Companion" screen prints (see app_config.h):
+#   idf.py -DDM_SETUP_ADDRESS=example.org/deskmedia build
+if(DM_SETUP_ADDRESS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DM_SETUP_ADDRESS="${DM_SETUP_ADDRESS}")
 endif()
 
 # Dev self-tests, off by default:  idf.py -DAPP_WIFI_SELFTEST=1 build   (drops the Wi-Fi link once and times the recovery)

@@ -14,17 +14,16 @@
 
     The three files are flashed SEPARATELY (never as one merged image: that would blank the display's storage and with it the pairing).
 
-.PARAMETER SetupUrl / SetupUrlShort
-    Where the "Install DeskMedia Companion" screen's QR code points and how it prints the address (see firmware\main\app_config.h).
-    Without them the project default is used.
+.PARAMETER SetupAddress
+    The address the "Install DeskMedia Companion" screen prints, e.g. github.com/<owner>/<repo> (see firmware\main\app_config.h).
+    Without it the project default is used.
 
 .EXAMPLE
     .\tools\package_firmware.ps1
-    .\tools\package_firmware.ps1 -SetupUrl https://example.org/setup -SetupUrlShort example.org/setup
+    .\tools\package_firmware.ps1 -SetupAddress example.org/deskmedia
 #>
 param(
-    [string]$SetupUrl = '',
-    [string]$SetupUrlShort = '',
+    [string]$SetupAddress = '',
     [string]$OutDir = (Join-Path $PSScriptRoot '..\release\firmware')
 )
 $ErrorActionPreference = 'Stop'
@@ -33,8 +32,7 @@ $buildRel = 'build\product'
 $buildDir = Join-Path $root "firmware\$buildRel"
 
 $idfArgs = @('-B', $buildRel, '-DAPP_DEV_TOOLS=0', '-DAPP_NO_WIFI=1', '-DAPP_UI_DEMO=0')
-if ($SetupUrl)      { $idfArgs += "-DDM_SETUP_URL=$SetupUrl" }
-if ($SetupUrlShort) { $idfArgs += "-DDM_SETUP_URL_SHORT=$SetupUrlShort" }
+if ($SetupAddress) { $idfArgs += "-DDM_SETUP_ADDRESS=$SetupAddress" }
 $idfArgs += 'build'
 
 Write-Host "Building the product firmware in $buildDir ..."

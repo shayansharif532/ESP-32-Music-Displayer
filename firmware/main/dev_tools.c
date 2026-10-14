@@ -144,7 +144,7 @@ static void pair_shot_task(void *arg)
 /* "link_0" .. "link_6": shows one onboarding screen (ui_link_kind_t, in that order) and photographs it, for reviewing the wording and the layout */
 static void link_shot_task(void *arg)
 {
-    ui_link_show((ui_link_kind_t)(intptr_t)arg, DM_SETUP_URL, DM_SETUP_URL_SHORT, "OFFICE-PC");
+    ui_link_show((ui_link_kind_t)(intptr_t)arg, DM_SETUP_ADDRESS, "OFFICE-PC");
     vTaskDelay(pdMS_TO_TICKS(700));
     send_screenshot();
     vTaskDelete(NULL);
