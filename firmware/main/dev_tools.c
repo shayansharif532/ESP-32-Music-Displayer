@@ -22,9 +22,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_rom_crc.h"
-#include "esp_rom_sys.h"
 #include "esp_system.h"
-#include "hal/usb_serial_jtag_ll.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -149,23 +147,6 @@ static void link_shot_task(void *arg)
     ui_link_show((ui_link_kind_t)(intptr_t)arg, DM_SETUP_URL, DM_SETUP_URL_SHORT, "OFFICE-PC");
     vTaskDelay(pdMS_TO_TICKS(700));
     send_screenshot();
-    vTaskDelete(NULL);
-}
-
-/* "usb_replug_<ms>": what pulling the USB cable and plugging it back in does to this board, which the cable also powers: the PC sees the device
- * vanish (the display lets go of the USB data lines), and after <ms> the board is reset the way a power-up resets it (a SYSTEM reset: unlike the
- * CPU reset of esp_restart() it also resets the USB-Serial/JTAG peripheral, so the device enumerates again from scratch). For testing the companion's
- * re-detection and the display's start-up. NOTE: letting go of the data lines without that reset leaves the port detached until the cable is
- * physically re-plugged: do not "just detach". */
-static void replug_task(void *arg)
-{
-    const int ms = (int)(intptr_t)arg;
-    ESP_LOGW(TAG, "debug: USB replug in %d ms", ms);
-    vTaskDelay(pdMS_TO_TICKS(150));                         /* the log line leaves first */
-    const usb_serial_jtag_pull_override_vals_t off = { .dp_pu = false, .dp_pd = false, .dm_pu = false, .dm_pd = false };
-    usb_serial_jtag_ll_phy_enable_pull_override(&off);
-    vTaskDelay(pdMS_TO_TICKS(ms));
-    esp_rom_software_reset_system();
     vTaskDelete(NULL);
 }
 
@@ -297,8 +278,6 @@ void dev_tools_handle(const char *what)
         esp_restart();
     } else if (strncmp(what, "link_", 5) == 0 && what[5] >= '0' && what[5] <= '6' && what[6] == '\0') {
         xTaskCreatePinnedToCore(link_shot_task, "shot", 6144, (void *)(intptr_t)(what[5] - '0'), 2, NULL, 0);
-    } else if (strncmp(what, "usb_replug_", 11) == 0 && atoi(what + 11) >= 200 && atoi(what + 11) <= 60000) {
-        xTaskCreatePinnedToCore(replug_task, "replug", 4096, (void *)(intptr_t)atoi(what + 11), 2, NULL, 0);
     } else if (strcmp(what, "pair_shot") == 0) {
         xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Board-in-the-loop test of the USB link as a PRODUCT: discovery, pairing once, and every way the connection can be interrupted.
 
-    companion\\.venv\\Scripts\\python.exe tools\\usb_test.py [--port COM5] [--quick]
+    companion\\.venv\\Scripts\\python.exe tools\\usb_test.py [--port COM5]
 
 Needs: the board on its native USB port, flashed with a development build of this checkout (-DAPP_DEV_TOOLS=1 -DAPP_NO_WIFI=1: no Wi-Fi, so the
 only way the display can reach the companion is the cable), no other program holding the COM port (the real companion must be stopped), nobody
@@ -9,10 +9,8 @@ using the display by hand. The companion under test runs in this process with a 
 silent fake media sessions.
 
 Checks:  1 the display is found without any port setting and pairs (the pairing window opens by itself), 2 a companion restart reconnects
-without asking for a pairing again, 3 a reboot of the display does too, 4 a simulated unplug / replug of the cable (the display lets go of the
-USB data lines, then restarts as a power-up does: for the PC this is what pulling the cable looks like) of 1.5 s, 3 s, 9 s and 20 s is
-recovered by itself, with the same pairing, 5 forgetting the pairing on the PC makes the display ask again and the pairing window opens by itself, 6 data keeps flowing
-afterwards (poll counters, artwork) and the display never reset except where this test rebooted it.
+without asking for a pairing again, 3 a reboot of the display does too, 4 forgetting the pairing on the PC makes the display ask again and the
+pairing window opens by itself, 5 health: no malformed frames, heap / stack steady. (Unplugging and re-plugging the cable is a physical test.)
 """
 import argparse
 import json
@@ -48,7 +46,6 @@ def served(comp) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="auto", help="only probe this COM port (default: discover it)")
-    ap.add_argument("--quick", action="store_true", help="skip the 20 s detach")
     args = ap.parse_args()
     os.makedirs(LOGS, exist_ok=True)
     kept = os.environ.get("DM_TEST_DATA_DIR", "")             # keep the pairing between runs (never the real data folder)
@@ -98,44 +95,33 @@ def main() -> int:
         check("3 without a pairing prompt", board.count(r"pairing code shown", mark) == 0 and comp.pairing.paired)
         resets0 = board.count(RESET_RX)
 
-        print("\n== 4. the cable is pulled and plugged back in (simulated: the display lets go of the USB data lines, then restarts as a power-up does)")
-        for ms in (1500, 3000, 9000) + (() if args.quick else (20000,)):
-            mark = board.mark()
-            comp.act(f"usb_replug_{ms}", gap=0.0)
-            went = wait_for(lambda: comp.usb_state() != "connected", 15.0, 0.1)
-            t_gone = time.time()
-            check(f"4 {ms / 1000:g} s unplugged: the companion notices", went, f"state {comp.usb_state()}")
-            back = wait_for(lambda: comp.usb_state() == "connected", ms / 1000 + 45.0, 0.1)
-            results[f"replug_{ms}_back_after_s"] = round(time.time() - t_gone, 1)
-            check(f"4 {ms / 1000:g} s unplugged: the link is back by itself, same pairing", back and comp.pairing.paired, f"{results[f'replug_{ms}_back_after_s']} s after it went away")
-            check(f"4 {ms / 1000:g} s unplugged: no pairing prompt", board.count(r"pairing code shown", mark) == 0)
-            check(f"4 {ms / 1000:g} s unplugged: the display is served again", served(comp))
-            time.sleep(2.0)
+        # (A real unplug / replug of the cable is a PHYSICAL test, see docs/development.md: the board cannot be made to simulate it from software -
+        # releasing the USB data lines from the firmware stranded the port, even with a system reset afterwards, until the cable was re-plugged.)
         resets0 = board.count(RESET_RX)
 
-        print("\n== 5. the pairing is forgotten on the PC: the display asks again, the window opens by itself")
+        print("\n== 4. the pairing is forgotten on the PC: the display asks again, the window opens by itself")
         mark = board.mark()
         n_events = len(events)
         comp.pairing.forget()
         ok = wait_for(lambda: board.find(r"pairing lost|status 7", mark) is not None, 30.0, 0.2)
-        check("5 the display says the pairing is lost", ok)
+        check("4 the display says the pairing is lost", ok)
         ok = wait_for(lambda: any(e.get("type") == "pair-request" for e in events[n_events:]) or comp.pairing.window_open, 30.0, 0.2)
-        check("5 the companion opens the pairing window by itself", ok)
-        check("5 and the display pairs again", uh.ensure_paired(board, comp))
-        check("5 and is served", served(comp))
+        check("4 the companion opens the pairing window by itself", ok)
+        check("4 and the display pairs again", uh.ensure_paired(board, comp))
+        check("4 and is served", served(comp))
 
-        print("\n== 6. health")
+        print("\n== 5. health")
         counters = link_counters(comp)
         bad = {k: v for k, v in counters.items() if k.startswith("parser_") and k not in ("parser_frames",) and v}
-        check("6 no malformed frames on the cable in normal operation", not bad, str(bad))
+        check("5 no malformed frames on the cable in normal operation", not bad, str(bad))
         health = [m for _t, m in board.since(0) if "health:" in m]
         if len(health) >= 2:
             def field(line, name):
                 m = re.search(name + r"=(\d+)", line)
                 return int(m.group(1)) if m else 0
-            check("6 internal heap steady", field(health[-1], "int_free") >= field(health[0], "int_free") - 4096, f"{field(health[0], 'int_free')} -> {field(health[-1], 'int_free')}")
-            check("6 PSRAM did not leak", field(health[-1], "psram_free") >= field(health[0], "psram_free") - 131072, f"{field(health[0], 'psram_free')} -> {field(health[-1], 'psram_free')}")
-            check("6 LVGL stack headroom healthy", field(health[-1], "lvgl_stack_free_min") >= 8000, str(field(health[-1], "lvgl_stack_free_min")))
+            check("5 internal heap steady", field(health[-1], "int_free") >= field(health[0], "int_free") - 4096, f"{field(health[0], 'int_free')} -> {field(health[-1], 'int_free')}")
+            check("5 PSRAM did not leak", field(health[-1], "psram_free") >= field(health[0], "psram_free") - 131072, f"{field(health[0], 'psram_free')} -> {field(health[-1], 'psram_free')}")
+            check("5 LVGL stack headroom healthy", field(health[-1], "lvgl_stack_free_min") >= 8000, str(field(health[-1], "lvgl_stack_free_min")))
         results["link_counters"] = counters
     finally:
         for p in procs.values():

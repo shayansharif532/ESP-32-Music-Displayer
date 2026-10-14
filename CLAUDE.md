@@ -60,7 +60,7 @@ backup/           your own factory flash backup goes here (*.bin is git-ignored)
 6. **Factory backup:** make a verified full-flash backup of a board before its first flash; never commit it (`*.bin` is git-ignored); keep a
    second copy outside the repository ([docs/development-history/M0-factory-backup.md](docs/development-history/M0-factory-backup.md)).
 7. Never ship a firmware built with `-DAPP_DEV_TOOLS=1` (`tools/package_firmware.ps1` builds the product image and refuses one that contains the dev tools).
-8. Never release the USB data lines in test code without a system reset afterwards: the port then stays detached until the cable is re-plugged (`usb_replug_<ms>` does it right).
+8. **Never manipulate the USB data lines from firmware or tests** (the USB-Serial/JTAG pull-up override, "simulated unplug"): done twice, the port never came back, with or without a system reset, until the cable was physically re-plugged. Unplug / replug is a physical test.
 
 ## Rules: secrets and publication
 

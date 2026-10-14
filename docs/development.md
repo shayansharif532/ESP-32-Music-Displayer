@@ -81,7 +81,7 @@ Build options (CMake cache variables):
 
 | Option | Effect |
 |---|---|
-| `-DAPP_DEV_TOOLS=1` | Dev-only: screenshot dump, simulated touches / key presses, `reboot`, `usb_replug_<ms>`, the on-target self-tests and a USB DEBUG-frame channel for the test tools. **Never ship a build with it** (`package_firmware.ps1` refuses an image that contains it) |
+| `-DAPP_DEV_TOOLS=1` | Dev-only: screenshot dump, simulated touches / key presses, `reboot`, the on-target self-tests and a USB DEBUG-frame channel for the test tools. **Never ship a build with it** (`package_firmware.ps1` refuses an image that contains it) |
 | `-DAPP_NO_WIFI=1` | Ignore `firmware\secrets.local.h`: the product configuration even on a machine that has the file (what the USB tests use) |
 | `-DAPP_UI_DEMO=1` | UI development without any link: a scripted fake player |
 | `-DDM_SETUP_URL=... -DDM_SETUP_URL_SHORT=...` | Where the *Install DeskMedia Companion* screen's QR code points and how the address is printed (default: the project's GitHub releases page) |
@@ -118,8 +118,9 @@ Notes learned the hard way (native port, Windows):
 * A **RTS rising edge** resets the chip, and the DTR level at that edge selects download mode (DTR=1) or normal boot (DTR=0). Software that opens the port must
   keep both lines low and never toggle them (the companion's port code does exactly that); never open the port with both DTR and RTS asserted.
 * A software reset (`esp_restart`) keeps the port enumerated; a hard reset or a power cycle (also unplugging the cable) re-enumerates it.
-* **Never release the USB data lines in a test without a system reset afterwards** (`usb_serial_jtag` pull-up override): the port stays detached until the
-  cable is physically re-plugged. `usb_replug_<ms>` does it correctly (detach, then `esp_rom_software_reset_system()`).
+* **Never manipulate the USB data lines from firmware or tests** (the `usb_serial_jtag` pull-up override, "simulated unplug"): twice the port never came
+  back, with or without a system reset afterwards, until the cable was physically re-plugged. Unplug / replug is a physical test; the companion's reaction to a
+  vanishing port is covered by the simulated display in `test_usblink.py`.
 * After editing `firmware\sdkconfig.defaults` run `.\tools\idf.ps1 set-target esp32s3` (or delete `firmware\sdkconfig`) so it is re-applied.
 
 ### Linux / macOS (firmware only, untested)
@@ -203,7 +204,7 @@ Scripts in `tools/` (run with `tools\venv\Scripts\python.exe` unless noted; the 
 | `analyze_flash_dump.py` | Read-only analysis of a full flash dump: partition layout and firmware identity; never prints NVS values | a dump |
 | `screenshot.py` | Assembles a PNG from the screenshot lines of the display (CRC-checked); the board tests use its `assemble()` on lines that arrive as LOG frames (`usb_harness`). The standalone command line (`--tap`, `--do <gesture>`) read the console of the LAN-era firmware and has **not** been ported to the USB link | dev firmware (`-DAPP_DEV_TOOLS=1`) |
 | `session_test.py` | Hardware-in-the-loop test of gestures, source switching, auto-follow, Spotify buttons and per-app volume; judged from the companion's log and `/sources` | dev firmware + a companion with `--dev-tools --lan --bind 127.0.0.1` (the USB link carries the display; the loopback HTTP port is the test's control channel); starts its own silent fake session |
-| `usb_test.py` | Hardware-in-the-loop test of the USB link as a product: discovery without a port setting, the automatic pairing window, restart of the companion, reboot of the display, simulated unplug / replug (1.5 to 20 s), forgetting the pairing, heap / stack health. Runs its own companion (scratch data folder) in the process | dev firmware built with `-DAPP_NO_WIFI=1`; the real companion stopped |
+| `usb_test.py` | Hardware-in-the-loop test of the USB link as a product: discovery without a port setting, the automatic pairing window, restart of the companion, reboot of the display, forgetting the pairing, heap / stack health. Runs its own companion (scratch data folder) in the process. Unplugging and re-plugging the cable is a physical test | dev firmware built with `-DAPP_NO_WIFI=1`; the real companion stopped |
 | `usb_harness.py` | The USB versions of the harness classes the board tests use (`UsbBoard`: the display's log lines from LOG frames, `reset()` = the `reboot` action; `UsbCompanion`: the product's `AppRuntime` with a scratch data folder) | imported by the tests above; `DM_TEST_DATA_DIR` keeps the pairing between runs |
 | `idle_test.py` | Hardware-in-the-loop test of the idle screen (transitions, delay, picture persistence across reboots, fit modes, the clock, **the date: four formats, hide, midnight rollover on the device, after a reboot and a companion restart**, corrupt pictures, repeated idle <-> playback soak, the source carousel). `--transport usb` (default `lan`) talks over the cable; the date check compares the screenshot with the companion's preview | dev firmware; stop the normal companion first |
 | `soak_gestures.py` + `analyze_soak.py` | Scripted random swipes, taps and key presses for a few minutes while a serial log is captured; the analyzer reports resets, panics and heap / stack drift | dev firmware, silent fake session |

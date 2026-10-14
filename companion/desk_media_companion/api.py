@@ -82,8 +82,7 @@ DEBUG_ACTIONS = {"screenshot", "tap_play", "tap_next", "tap_prev", "tap_art",
                  "swipe_right_shot", "swipe_left_shot", "swipe_up_shot", "swipe_down_shot", "key_up_shot", "key_down_shot",
                  "overlay_none_shot", "overlay_pc_shot", "overlay_muted_shot", "overlay_vol_shot",
                  "pair_accept", "pair_cancel", "pair_shot", "touch_pair", "touch_paircancel", "reboot",
-                 "link_0", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6",
-                 "usb_replug_1500", "usb_replug_3000", "usb_replug_9000", "usb_replug_20000"}
+                 "link_0", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"}
 
 MAX_BODY = 4096                 # the API has no big requests: control routes carry no body at all
 PAIR_BODY_MAX = 1024            # /pair/* and /link/*

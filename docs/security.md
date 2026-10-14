@@ -100,7 +100,7 @@ the PC that can open the COM port, and anything that can pretend to be the board
   display (its default of 1000 would overflow a task stack); an artwork JPEG larger than the decode buffers is refused after the scale-down loop.
 * **Nothing from a peer is executed or used as a path.** No frame can make either side write a file, run a command or open a location; the tray shows only fixed
   text plus a cleaned firmware string, a short device id and the port name; the QR code on the display carries a compile-time URL.
-* **Development features cannot be reached in a product build.** DEBUG frames, screenshots, scripted touches, `reboot` and `usb_replug_*` exist only with
+* **Development features cannot be reached in a product build.** DEBUG frames, screenshots, scripted touches, and `reboot` exist only with
   `APP_DEV_TOOLS` (`tools/package_firmware.ps1` refuses an image that contains them); in the companion `/debug/*` exists only with `--dev-tools`. Product firmware
   mirrors only warnings and errors of its log, which the companion keeps at warning level unless started with `--debug`.
 * **No firewall involvement.** In USB mode the companion listens on nothing; the installer changes no firewall, Defender or security setting.

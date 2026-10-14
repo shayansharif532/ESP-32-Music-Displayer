@@ -5,11 +5,12 @@ Short wording for a CV, a portfolio page or a project listing. Everything here i
 ## Project summary
 
 **DeskMedia Display: ESP32-S3 / Windows Media Controller.**
-Designed and built a networked ESP32-S3 touchscreen media controller integrating Windows GSMTC and Core Audio APIs. Implemented
+Designed and built an ESP32-S3 touchscreen media controller integrating Windows GSMTC and Core Audio APIs. Implemented
 multi-application playback detection, gesture-driven source switching, per-application volume control, adaptive artwork rendering, persistent
-customization, automatic device discovery, and resilient Wi-Fi communication using ESP-IDF and LVGL.
+customization, a framed and versioned USB link protocol with automatic port discovery and one-time pairing, a guided first-time setup on the
+device itself, and a per-user Windows installer with a tray application, using ESP-IDF, LVGL and Python.
 
-Stack: C (ESP-IDF 5.5.5, FreeRTOS, LVGL 9.5), Python 3.12 (WinRT GSMTC bindings, Core Audio via pycaw, Pillow), PowerShell, UDP / HTTP on the LAN.
+Stack: C (ESP-IDF 5.5.5, FreeRTOS, LVGL 9.5), Python 3.12 (WinRT GSMTC bindings, Core Audio via pycaw, pyserial, Pillow, PyInstaller), Inno Setup, PowerShell; USB CDC serial link (optional UDP / HTTP on the LAN).
 Repository: [README.md](README.md).
 
 ## Résumé bullets
@@ -23,6 +24,12 @@ Repository: [README.md](README.md).
   with a commitment and a six-digit comparison code, HKDF key derivation) followed by HMAC-SHA256 signed requests with single-use nonces, replay
   protection, per-address failure limiting and signed responses, on both a Python HTTP server and an ESP32 client ([docs/protocol.md](docs/protocol.md),
   test vectors shared by both implementations).
+* **USB link protocol and product onboarding.** Replaced the LAN-only link with a USB-first one after measuring the board's USB capabilities (native USB-Serial/JTAG, CDC, no custom driver): a
+  versioned, length-prefixed, double-checksummed frame protocol (DMLINK v1) with a resynchronising streaming parser, chunked responses up to 160 KB, presence beacons, duplicate suppression
+  and a mutual challenge-response session bound to the pairing key ([docs/usb-protocol.md](docs/usb-protocol.md), test vectors checked on the PC and on the target); automatic COM-port discovery that
+  survives unplugging, reboots and restarts of either side; setup screens on the display (charge-only cable detection, QR code to the installer, pairing, update-needed cases); a per-user
+  Windows installer with no administrator rights and no firewall prompt in USB mode; an independent security review whose findings (a JSON nesting stack overflow among them) were fixed
+  ([docs/security.md](docs/security.md)).
 * **Image pipeline across PC and microcontroller.** Removed app logos structurally (Spotify's alpha composite is split by its alpha bands, never by
   a fixed crop), trimmed letterbox bars, rendered aspect-preserving covers, and benchmarked edge-only, halo-limited up-scaling against alternatives (PSNR and
   edge-energy scoring) for 150 px browser thumbnails; on the ESP32, decoded baseline JPEGs into fixed PSRAM buffers and baked a per-track blurred,
@@ -33,9 +40,9 @@ Repository: [README.md](README.md).
 
 ## Skills demonstrated
 
-* Embedded C on ESP-IDF / FreeRTOS: task design and pinning, PSRAM buffer management, NVS and raw flash partitions with crash-safe writes, Wi-Fi back-off recovery, UDP discovery, bounded network parsing
+* Embedded C on ESP-IDF / FreeRTOS: task design and pinning, PSRAM buffer management, NVS and raw flash partitions with crash-safe writes, USB-Serial/JTAG device behaviour, framed binary protocols, Wi-Fi back-off recovery, UDP discovery, bounded parsing of untrusted input
 * LVGL 9 UI engineering on an RGB panel: gestures, screen transitions, overlays, dithered RGB565 rendering, generated fonts
-* Windows platform APIs from Python: WinRT GSMTC (metadata, thumbnails, transport, Spotify shuffle / repeat), Core Audio per-application sessions, tray UI (pystray, tkinter), PyInstaller packaging, per-user auto-start
+* Windows platform APIs from Python: WinRT GSMTC (metadata, thumbnails, transport, Spotify shuffle / repeat), Core Audio per-application sessions, tray UI (pystray, tkinter), PyInstaller and Inno Setup packaging, per-user auto-start, a tray application, pyserial
 * Protocol and security design: authenticated key agreement, MAC-signed requests, replay protection, LAN threat modelling
 * State-machine design and testing; test tooling (virtual finger and simulated key presses through the real LVGL input path, frame-buffer screenshots, soak analysis)
 * Hardware bring-up from a schematic: the two side buttons were traced to a GPIO and to a power-management chip that is read over I2C
