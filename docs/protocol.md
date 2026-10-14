@@ -1,11 +1,21 @@
 # Protocol: DeskMedia Companion <-> display
 
-Two small protocols connect the Windows companion and the ESP32 display, both on the local network:
+This file defines the **API** the Windows companion and the ESP32 display speak (routes, JSON, pairing, authentication; *API version 2*).
+The API has two interchangeable **transports**:
 
-| Channel | Port | Purpose |
+| Transport | Status | How the API travels |
+|---|---|---|
+| **USB cable** (DMLINK v1) | default, the product's way of working | each request is one framed message (the method, the target, a line break, an optional body) over the board's serial port, the answer a framed response with the same status codes and JSON bodies: [usb-protocol.md](usb-protocol.md). Presence, discovery and the session handshake are in that document; sections 3 (pairing) and 4 onward of this file apply unchanged |
+| **LAN** (optional, off by default) | developer / fallback | the two channels below |
+
+| LAN channel | Port | Purpose |
 |---|---|---|
 | UDP broadcast ("beacon") | 8766 | the companion announces itself, so the display needs no IP configuration |
 | HTTP/1.1, plain text | 8765 | now-playing state, artwork, idle-screen settings and the control commands |
+
+On USB the per-request MAC of section 2 is replaced by a session: the cable is point-to-point and carries no other client, so the display
+and the companion prove possession of the pairing key once per connection ([usb-protocol.md](usb-protocol.md) section 7) and the routes that
+need pairing are then served on that connection. The LAN-only protections of section 2 (private-client check, Host header, `X-Desk-Client`) have no meaning on a cable and are not applied there.
 
 Everything below describes **protocol version 2** (the first version with pairing and request authentication). The reasoning and
 the threat model are in [security.md](security.md); this file is the byte-level contract that the companion

@@ -16,11 +16,15 @@ display: it only describes what is playing (title, artist, progress, a cover ima
   (GSMTC, `Windows.Media.Control`: the same source as the media overlay and the media keys). Every app that publishes system media
   controls is covered: Spotify desktop, YouTube / YouTube Music in Chrome or Edge, VLC, Apple Music, ... Per-application volume comes
   from the Windows Core Audio session API.
-* The companion serves that over a small **HTTP API on the local network** and announces itself with a **UDP beacon**.
-* The **ESP32-S3** finds the companion by itself, polls it about once a second, draws the 480x480 LVGL UI and sends play / pause /
-  next / previous / seek / volume / source-switch commands back.
+* The companion serves that as **one small API** (`api.py`: about a dozen routes, [protocol.md](protocol.md)) over two interchangeable
+  transports: the **USB cable** (DMLINK v1 frames over the board's COM port, [usb-protocol.md](usb-protocol.md); the default and the product's
+  way of working) and, only when switched on, **HTTP on the local network** announced with a UDP beacon.
+* The **ESP32-S3** finds the companion by itself (it hears a USB BEACON frame answered, or on the LAN a UDP beacon), polls it about once a
+  second, draws the 480x480 LVGL UI and sends play / pause / next / previous / seek / volume / source-switch commands back.
 * No Spotify account, Client ID, Premium subscription, OAuth, tokens or internet access is involved. Display and companion pair once
-  (a six-digit code confirmed on both ends) and sign every later request ([protocol.md](protocol.md)).
+  (a six-digit code confirmed on both ends); the pairing is remembered on both sides, every LAN request is signed, and every USB connection
+  proves the key first ([protocol.md](protocol.md), [usb-protocol.md](usb-protocol.md) section 7).
+* No Wi-Fi is needed: the display's firmware has no credentials in the product configuration ([ADR-009](decisions/ADR-009-usb-first-transport.md)).
 
 ```
  Spotify / Chrome / Edge / any media app
@@ -30,11 +34,12 @@ display: it only describes what is playing (title, artist, progress, a cover ima
    (session metadata, transport controls)   (per-application volume)
                   |
                   v
-          DeskMedia Companion  (Python)
-          HTTP :8765  +  UDP beacon :8766
+          DeskMedia Companion  (Python, tray icon)
+          one API  --  USB link (COM port, DMLINK v1)   [default]
+                   \-  HTTP :8765 + UDP beacon :8766    [optional, off by default]
                   |
                   v
-            Local network (LAN / Wi-Fi)
+          USB cable  (or LAN / Wi-Fi)
                   |
                   v
         ESP32-S3 touch display  (ESP-IDF + LVGL)
@@ -46,28 +51,32 @@ flowchart LR
         APPS["Media apps<br/>Spotify, Chrome / Edge + YouTube,<br/>VLC, Apple Music, ..."]
         GSMTC["GSMTC<br/>session metadata + transport controls"]
         CORE["Core Audio<br/>per-app session volume"]
-        COMP["DeskMedia Companion<br/>HTTP API :8765<br/>UDP beacon :8766"]
-        TRAY["Tray icon + Settings window<br/>idle screen configuration"]
+        COMP["DeskMedia Companion<br/>api.py: one API<br/>usblink.py: USB transport<br/>server.py: optional HTTP :8765 + UDP beacon :8766"]
+        TRAY["Tray icon + windows<br/>status, pairing, idle-screen settings"]
         APPS --> GSMTC
         APPS --> CORE
         GSMTC --> COMP
         CORE --> COMP
         TRAY --> COMP
     end
-    LAN(("Local network"))
+    CABLE(("USB cable<br/>DMLINK v1"))
+    LAN(("optional:<br/>local network"))
     subgraph ESP["ESP32-S3 touch display"]
-        PCM["pc_media<br/>discovery, polling, artwork, commands"]
-        UI["ui<br/>LVGL player screen"]
-        IDLE["idle_screen<br/>themes, clock, photo"]
+        LINK["usb_link<br/>frames, presence, log mirror"]
+        PCM["pc_media<br/>transport choice, session, polling, artwork, commands"]
+        UI["ui<br/>LVGL player screen, setup screens"]
+        IDLE["idle_screen<br/>themes, clock, date, photo"]
         KEYS["side_keys<br/>volume buttons"]
+        LINK --> PCM
         PCM --> UI
         PCM --> IDLE
         KEYS --> PCM
         UI --> PCM
     end
-    COMP -->|"UDP beacon"| LAN
-    COMP <-->|"HTTP requests and answers"| LAN
-    LAN <--> PCM
+    COMP <-->|"requests and answers as frames"| CABLE
+    CABLE <--> LINK
+    COMP <-.->|"HTTP + UDP beacon"| LAN
+    LAN <-.-> PCM
 ```
 
 ## Why this design
@@ -76,9 +85,13 @@ flowchart LR
   sets the Media Session API) and players all publish to it. Control goes through the same session, so next / previous behave exactly like
   the keyboard media keys.
 * **No credentials to get wrong.** No OAuth, no tokens, no Premium requirement, no developer account, no user cap.
-* **Simple, fast firmware.** Plain HTTP on the LAN (no TLS handshakes on the ESP32), small JSON, artwork pre-rendered by the PC at exactly
-  the size it is drawn (a square or a landscape card) as a baseline JPEG that the ESP32's decoder handles without scaling or exotic formats.
-* **Trade-off accepted.** The PC must be on, on the same network and running the companion. If it is not, the display says so.
+* **Simple, fast firmware.** Small JSON, artwork pre-rendered by the PC at exactly the size it is drawn (a square or a landscape card) as a
+  baseline JPEG that the ESP32's decoder handles without scaling or exotic formats; no TLS handshakes on the ESP32.
+* **USB first, because it needs no setup.** A USB cable gives power and data in one; Windows' inbox driver makes a COM port; there is no
+  Wi-Fi password to type, no router, no firewall prompt and no discovery problem. The same API runs over both transports, so nothing about
+  the media features depends on how the bytes travel ([ADR-009](decisions/ADR-009-usb-first-transport.md) has the measurements and the options that were rejected).
+* **Trade-off accepted.** The PC must be on, running the companion and connected with a data cable. If it is not, the display says which step
+  is missing (setup screens below).
 
 ## Components
 
@@ -90,31 +103,42 @@ flowchart LR
 | `sources.py` | The pure (no WinRT, no I/O) selection model: which sessions are worth showing, the wrapping source ring, the `Selector` state machine AUTO / MANUAL_TEMP, the synthetic Idle item, Spotify identification by app id. Unit-tested with scripted timelines |
 | `artwork.py` | Thumbnail clean-up (splits Spotify's alpha composite structurally, trims symmetric black letterbox bars), aspect-preserving rendering to the exact size the display draws, edge-only halo-limited up-scaling for small browser thumbnails, baseline JPEG encoding (Pillow) |
 | `volume.py` | Per-application volume through Core Audio sessions (`ISimpleAudioVolume` via pycaw / comtypes); never the master volume |
-| `server.py` | The HTTP API (`ThreadingHTTPServer`): LAN-only clients, IP-literal Host header, `X-Desk-Client` on POSTs, request authentication after pairing ([protocol.md](protocol.md)) |
-| `discovery.py` | The UDP beacon, sent every 2 s from each real LAN interface (VPN / virtual adapters skipped) |
-| `idle.py` | The idle-screen configuration store (`%LOCALAPPDATA%\DeskMediaCompanion\idle`): theme, accent, clock, custom line, delay, background picture; all picture validation, cropping / fitting / blurring and baseline-JPEG encoding (<= 200 KB, exactly 480x480) |
-| `ui.py` | System-tray icon and the Settings window (tkinter + pystray) |
-| `autostart.py` | Optional per-user start with Windows (`HKCU\...\Run`, no admin rights) |
+| `api.py` | The transport-independent API: routing, parameter validation and bounds, authentication (LAN: per-request MACs; USB: the connection's session), the idle-screen routes, the development `/debug/*` routes. Both transports call `Api.handle(...)` and get the same answers |
+| `framing.py` | DMLINK v1: frame encoder, CRC-16 / CRC-32, the streaming parser that resynchronises after any damage ([usb-protocol.md](usb-protocol.md)) |
+| `usblink.py` | The USB transport: finds the board's COM port (VID 303A / PID 1001, no user choice), the per-port `Link` (presence handshake, requests -> `Api`, chunked responses, duplicate suppression, session authentication, log lines from the display) and the `LinkManager` (re-scans after unplug / reboot, one active display, the pairing policy: the pairing window opens by itself for an unpaired display) |
+| `runtime.py`, `config.py` | `AppRuntime` owns the transports and the status the tray reads; `SettingsStore` keeps `settings.json` (USB on, LAN off by default, automatic pairing) with a tolerant reader |
+| `server.py` | The optional HTTP transport (`ThreadingHTTPServer`): LAN-only clients, IP-literal Host header, `X-Desk-Client` on POSTs, request authentication after pairing ([protocol.md](protocol.md)); started only when the LAN setting or `--lan` is on |
+| `discovery.py` | The optional UDP beacon, sent every 2 s from each real LAN interface (VPN / virtual adapters skipped) |
+| `idle.py`, `idle_date.py`, `idle_layout.py` | The idle-screen configuration store (`%LOCALAPPDATA%\DeskMediaCompanion\idle`): theme, accent, 12 / 24 h clock, date (four formats or hidden), custom line, delay, background picture; picture validation, cropping / fitting / blurring and baseline-JPEG encoding (<= 200 KB, exactly 480x480); the date formatting and the layout contract the firmware implements too (shared test vectors); the preview renderer with the device's geometry |
+| `ui.py`, `tray.py` | The Settings window and the pairing dialog (tkinter); the tray icon (pystray): device status, pairing, start with Windows, the Wi-Fi switch, log folder, About, Exit |
+| `autostart.py` | Per-user start with Windows (`HKCU\...\Run`, no admin rights; the installer writes the same value) |
+| `selftest.py`, `run_companion.py` | The packaged exe's entry point and `--selftest` (checks the bundled parts on a machine without Python) |
 | `pairing.py`, `auth.py`, `x25519.py` | One-time pairing (X25519 key agreement with a six-digit comparison code; the per-user key store is protected with Windows DPAPI) and request authentication (single-use nonces, HMAC-SHA256 request MACs, response proofs, a small per-address failure limiter); specified in [protocol.md](protocol.md) |
 
 ### ESP32-S3 firmware (`firmware/`)
 
 | Component | Where | Responsibility |
 |---|---|---|
-| `main` | `firmware/main/` | Display / LVGL start-up (24 KB LVGL stack on core 1, one draw unit), the glue: companion events -> UI calls, UI taps -> commands, the player <-> idle screen decision, status line; a UI-only demo when no Wi-Fi credentials are built in; health / soak logging; dev-only tools (`dev_tools.c`, compiled only with `-DAPP_DEV_TOOLS=1`) |
-| `wifi_mgr` | `components/wifi_mgr/` | Station Wi-Fi, exponential-backoff reconnect (1, 2, 4, 8, 15, then every 30 s), SNTP, credentials kept in RAM only, nothing sensitive logged |
-| `pc_media` | `components/pc_media/` | Listens for the beacon (or uses a fixed IP), polls `/now-playing` (time-scheduled, never starved by commands), downloads and decodes artwork (square or landscape, up to 432x320) into fixed PSRAM buffers, bakes the artwork-derived background, queues commands (volume and source commands coalesced), syncs the idle-screen settings, reports link status |
-| `ui` | `components/ui/` | The LVGL player screen: square cover or landscape card with the text following it, progress line with seeking, transport buttons, Spotify-only shuffle / repeat buttons, swipe gestures, transient pill (source name with position dots, or "Volume 65%"); thread-safe `ui_*` API; callbacks only enqueue |
-| `idle_screen` | `components/idle_screen/` | The idle screen (its own LVGL screen): four themes, big clock (generated font), custom line, photo background; keeps the settings in NVS and the picture in the `idle_img` partition; syncs from the companion only when the version changed |
+| `main` | `firmware/main/` | Starts the USB link first, then the display / LVGL (24 KB LVGL stack on core 1, one draw unit); the glue: companion events -> UI calls, UI taps -> commands, the player <-> idle screen decision, the setup screens; Wi-Fi only when credentials were compiled in (development); health logging; dev-only tools (`dev_tools.c`, only with `-DAPP_DEV_TOOLS=1`) |
+| `usb_link` | `components/usb_link/` | The display's end of DMLINK v1: `dmlink.c` (pure C codec, self-tested on target against the spec's vectors) and `usb_link.c` (USB-Serial/JTAG driver, rx / tx tasks, presence beacons, request / response exchange with chunking, the firmware-log mirror to the companion, charge-only detection) |
+| `wifi_mgr` | `components/wifi_mgr/` | Optional: station Wi-Fi, exponential-backoff reconnect (1, 2, 4, 8, 15, then every 30 s), SNTP, credentials kept in RAM only, nothing sensitive logged |
+| `pc_media` | `components/pc_media/` | Chooses the transport (USB when the companion answers there, else LAN if Wi-Fi is configured), opens the authenticated USB session, polls `/now-playing` (time-scheduled, never starved by commands), downloads and decodes artwork (square or landscape, up to 432x320) into fixed PSRAM buffers, bakes the artwork-derived background, queues commands (volume and source commands coalesced), syncs the idle-screen settings, reports the link status including the setup steps; `pc_auth.c` holds the display's persistent identity and the pairing key |
+| `ui` | `components/ui/` | The LVGL player screen: square cover or landscape card with the text following it, progress line with seeking, transport buttons, Spotify-only shuffle / repeat buttons, swipe gestures, transient pill (source name with position dots, or "Volume 65%"); `ui_link.c` is the setup overlay (step strip, QR code); thread-safe `ui_*` API; callbacks only enqueue |
+| `idle_screen` | `components/idle_screen/` | The idle screen (its own LVGL screen): four themes, big clock (generated font), date (`idle_date.c`), custom line, photo background; keeps the settings in NVS and the picture in the `idle_img` partition; syncs from the companion only when the version changed; the date follows the PC's local time sent with every answer, so it rolls over at midnight without help |
 | `side_keys` | `components/side_keys/` | The two side buttons as volume down / up: BOOT (GPIO0) and PWR (AXP2101 key flags polled over I2C), debounce, hold-repeat capped at 3 s |
 
 Network code never calls LVGL directly except through the thread-safe `ui_*` functions; LVGL callbacks never block (they post to a queue).
 
 ## Data flow
 
-1. **Discovery.** The companion broadcasts a beacon. The display takes the packet's source address as the PC's IP (or uses a fixed
-   `DEV_COMPANION_HOST`). The first companion heard wins; another one is only taken over when the current one stops answering.
-2. **Pairing** (first use, or after "Forget paired display" on the PC): see [protocol.md](protocol.md) section 3. Afterwards every request is signed.
+1. **Finding each other.** Over USB the display sends a BEACON frame every 1-2 s (its identity, firmware, API range, whether it is paired); the
+   companion, which scans the COM ports for the board's VID / PID, answers with an ACK (its identity and API range) and from then on serves
+   the display. Neither side is told a port number. On the LAN (optional) the companion broadcasts a UDP beacon instead and the display takes
+   the packet's source address as the PC's IP. USB wins when both exist. A silent side is declared gone after 6 s (display's view) / 8 s
+   (companion's view) and found again by the same mechanism.
+2. **Pairing** (first use, or after "Forget paired display" on the PC): see [protocol.md](protocol.md) section 3. For an unpaired display the
+   companion opens the pairing window by itself (and a dialog with the code). Afterwards LAN requests are signed; each USB connection
+   starts with a mutual challenge-response over the pairing key ([usb-protocol.md](usb-protocol.md) section 7).
 3. **Polling.** About once a second `pc_media` requests `GET /now-playing` (~400 B of JSON over a kept-alive connection). The UI interpolates
    the progress bar locally every 250 ms.
 4. **Artwork.** Only when `art_id` changes: `GET /artwork?size=312&maxw=432` returns a ready-made baseline JPEG. The ESP32 decodes it into
@@ -127,6 +151,35 @@ Network code never calls LVGL directly except through the thread-safe `ui_*` fun
 ## Device states
 
 Derived from `firmware/main/main.c` (screen logic) and `firmware/components/pc_media/pc_media.c` (link status).
+
+First what the display says **before** it is connected (the *setup screens*, `ui_link.c`; a step strip at the top shows *USB - Companion - Paired*):
+
+```mermaid
+stateDiagram-v2
+    [*] --> STARTING: power on
+    STARTING: STARTING<br/>the USB link is already beaconing
+    STARTING --> NO_USB_DATA: no host data after the grace period (charge-only cable, charger)
+    STARTING --> USB_CONNECTED: the host's USB frames arrive
+    NO_USB_DATA --> USB_CONNECTED: data appears
+    USB_CONNECTED: USB CONNECTED<br/>looking for the companion
+    USB_CONNECTED --> COMPANION_MISSING: no ACK within 5 s
+    COMPANION_MISSING: INSTALL COMPANION<br/>QR code + address
+    COMPANION_MISSING --> USB_CONNECTED: a beacon is answered
+    USB_CONNECTED --> PAIRING: companion found, display not paired
+    PAIRING: PAIRING<br/>code on both ends
+    PAIRING --> READY: confirmed on both
+    USB_CONNECTED --> READY: already paired, session authenticated
+    READY: CONNECTED / READY<br/>player or idle screen
+    READY --> PAIRING_LOST: key refused
+    PAIRING_LOST --> PAIRING: pairing window reopens
+    USB_CONNECTED --> INCOMPATIBLE: API ranges do not overlap
+    INCOMPATIBLE: UPDATE COMPANION / UPDATE THE DISPLAY
+    READY --> USB_CONNECTED: companion silent for 6 s (the idle screen stays up for a short reconnect)
+```
+
+A companion seen within the last minute counts as "still there" (the screen stays on *USB connected* rather than jumping to the installation
+screen when the companion is merely restarting). Then the screen logic once a PC is connected (the Wi-Fi / "searching" states belong to the
+optional LAN transport):
 
 ```mermaid
 stateDiagram-v2
@@ -213,10 +266,11 @@ stateDiagram-v2
   companion refuses every control or volume request with `app=idle`.
 * Interactions that restart the 20 s timer: a control, seek, shuffle / repeat or volume key aimed at the selected session, and another swipe.
 
-## HTTP API endpoints (semantics)
+## API endpoints (semantics)
 
 [protocol.md](protocol.md) is the authoritative contract (beacon, authentication, pairing routes, limits). This table keeps the meaning of
-each endpoint; the answers are JSON (UTF-8) unless stated.
+each endpoint; the answers are JSON (UTF-8) unless stated. The routes are the same on both transports (over USB a "request" is a DMLINK frame
+carrying the same method and target, [usb-protocol.md](usb-protocol.md)).
 
 | Request | Answer |
 |---|---|
@@ -246,9 +300,12 @@ display then follows `playing` and shows no clock.
 
 | Situation | Display |
 |---|---|
-| Wi-Fi down / reconnecting | status "Connecting to Wi-Fi..." (auto-reconnect with back-off 1 -> 30 s) |
-| Companion not found yet | "Looking for your PC" |
-| Found earlier, now silent (PC asleep, companion closed, firewall) | the last track stays, status "Can't reach your PC"; retries every 2 s; re-discovers if the PC's IP changes |
+| USB cable unplugged from the PC, or the PC is off | after the grace period *No USB data*; when data returns the display connects again by itself |
+| Charge-only cable | *No USB data* (the controller reports no host while only power is present) |
+| Companion not installed / not running | *USB connected*, then after 5 s *Install DeskMedia Companion* with a QR code; switches to the player by itself when the companion starts |
+| Companion restarted or crashed, PC asleep | the last track stays, status "Can't reach your PC" (on the idle screen: "Reconnecting to your PC..."); found again automatically |
+| Corrupt or partial USB frames, a disconnect in the middle of a message | the parser drops one byte and resynchronises; the exchange is retried; no reboot, no state loss |
+| Wi-Fi down / reconnecting (LAN mode only) | status "Connecting to Wi-Fi..." (auto-reconnect with back-off 1 -> 30 s); re-discovers if the PC's IP changes |
 | Companion up, nothing playing (no session, or only paused ones) | the **idle screen** after the user's delay; tap it to bring the player back for 30 s when a paused session exists |
 | Idle picture missing / corrupt / undecodable | the built-in Dark theme; a failed transfer is retried (5 s, 15 s, then every minute) |
 | Artwork missing / not decodable | placeholder art; retried 3x per image, then given up on |
@@ -256,7 +313,7 @@ display then follows `playing` and shows no clock.
 
 ## Threading and memory (ESP32)
 
-Tasks: LVGL task (core 1, priority 4, 24 KB stack); `pc_poll` (12 KB stack) and `pc_discovery` (core 0, priority 3); `side_keys` (core 0,
+Tasks: LVGL task (core 1, priority 4, 24 KB stack); `usb_rx` (core 0, priority 4) and `usb_tx` (priority 3) for the USB link (16 KB driver rings each way, a 4 KB log ring); `pc_poll` (12 KB stack) and `pc_discovery` (LAN mode only; core 0, priority 3); `side_keys` (core 0,
 priority 4, 20 ms poll of GPIO0 and the AXP2101 key flags); `idle_load` (core 0, one-off start-up load of the stored idle settings and
 picture); Wi-Fi / lwIP (core 0); health logger (priority 1). One software draw unit for LVGL (two draw units were configured when the early touch crashes happened,
 see [M1](development-history/M1-lcd-touch.md)).
@@ -273,17 +330,19 @@ see [M1](development-history/M1-lcd-touch.md)).
 
 | What | Where | Notes |
 |---|---|---|
-| Idle-screen settings (theme, accent, clock, custom line, delay) | NVS namespace `idle` | validated by a magic value on load |
+| Idle-screen settings (theme, accent, clock, date and its format, custom line, delay) | NVS namespace `idle` | validated by a magic value on load; layout `IDL2` (the first release's `IDL1` is migrated, the date defaults to shown) |
 | Idle-screen background picture | the dedicated `idle_img` flash partition (1 MB, raw access) | a 4 KB header sector plus the JPEG; the header is written last, so an interrupted write means "no picture"; the CRC is re-checked on every load |
-| Pairing key and companion id (protocol v2) | NVS | stored only after the user confirmed the code and the display verified the companion's proof ([protocol.md](protocol.md)) |
-| Wi-Fi credentials | compile-time development configuration (`firmware/secrets.local.h`, git-ignored), kept in RAM at run time | no first-run provisioning flow exists yet |
-| Companion-side idle settings and picture | `%LOCALAPPDATA%\DeskMediaCompanion\idle\` | outside any repository |
+| Pairing key and companion id (protocol v2) | NVS namespace `dm_auth` | stored only after the user confirmed the code and the display verified the companion's proof ([protocol.md](protocol.md)); survives reboots and firmware updates |
+| The display's own identity (8 random bytes, created at first boot) | NVS `dm_auth`, key `dev` | what the companion pairs with: the same display is recognised on every cable and port |
+| Wi-Fi credentials (optional LAN mode) | compile-time development configuration (`firmware/secrets.local.h`, git-ignored), kept in RAM at run time | the product firmware has none |
+| Companion-side settings, pairing and idle picture | `%LOCALAPPDATA%\DeskMediaCompanion\` (`settings.json`, `pairing.bin` protected with Windows DPAPI, `idle\`, `companion.log`) | outside any repository and outside the install folder: an update or reinstall keeps them |
 
 Partition table (`firmware/partitions.csv`): `nvs` 0x9000 (24 KB), `phy_init`, `factory` app (8 MB), `idle_img` (1 MB, data subtype 0x40,
 carved out of the formerly unused 7 MB `storage`), `storage` (6 MB, unused). The app and NVS offsets are unchanged, so a normal flash keeps the stored data.
 
 ## Security and secrets
 
-Pairing, signed requests and the LAN threat model: [protocol.md](protocol.md) and [security.md](security.md). No Spotify credentials exist
-anywhere. Wi-Fi credentials are development-only, in the git-ignored `firmware/secrets.local.h` (made by `tools/set-dev-secrets.ps1`).
+Pairing, signed requests, the USB trust model and the LAN threat model: [protocol.md](protocol.md), [usb-protocol.md](usb-protocol.md) and
+[security.md](security.md). No Spotify credentials exist anywhere. Wi-Fi credentials are development-only, in the git-ignored
+`firmware/secrets.local.h` (made by `tools/set-dev-secrets.ps1`).
 Never commit credentials, never log them.
