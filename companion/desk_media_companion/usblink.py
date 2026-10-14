@@ -460,8 +460,12 @@ class Link:
 
     # -- the reader ------------------------------------------------------------------------------------------------------------------------
     def _rx_loop(self) -> None:
-        while self.pump(self._read_timeout):
-            pass
+        try:
+            while self.pump(self._read_timeout):
+                pass
+        except Exception as exc:                          # a bug must not leave a dead reader behind an "open" link: close it, the manager reconnects
+            log.warning("usb reader failed (%s)", type(exc).__name__)
+            self.close(f"reader failed ({type(exc).__name__})")
 
     def pump(self, timeout: float = 0.0) -> bool:
         """One step of the reader: read what is there (waiting up to `timeout`), parse, dispatch the frames, housekeeping. In unthreaded
@@ -477,7 +481,11 @@ class Link:
         if data:
             self._count("bytes_rx", len(data))
         for frame in self._parser.feed(data):             # an empty read still runs the parser's 1 s limit
-            self._handle_frame(frame, now)
+            try:
+                self._handle_frame(frame, now)
+            except Exception as exc:                      # one bad frame must not stop the reader (a handler bug is counted and logged)
+                self._count("handler_errors")
+                log.warning("usb frame handler failed (%s)", type(exc).__name__)
             if self._closed:
                 return False
         self._housekeeping(now)
@@ -550,6 +558,7 @@ class Link:
             self._counters["beacons"] += 1
             if old is None:
                 self._display_since = now
+                log.info("display %s (firmware %s, api %d) answered on %s", info.dev_hex[:8], info.fw or "?", info.api, self.name)
             elif old.dev != info.dev:
                 reset = "another display"
             elif old.boot != info.boot:

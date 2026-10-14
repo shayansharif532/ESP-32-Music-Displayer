@@ -304,6 +304,15 @@ class Housekeeping(RigCase):
         self.assertEqual(lines, [("raw", "ESP-ROM:esp32s3-20210327"), ("raw", "Build:Mar 27 2021"),
                                  ("raw", "rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)")])
 
+    def test_a_bug_in_a_frame_handler_is_counted_and_the_link_lives_on(self):
+        rig = self.connected()
+        with mock.patch.object(Link, "_on_ping", side_effect=RuntimeError("bug")), self.assertLogs("usb", "WARNING") as logs:
+            rig.sim.ping(b"x")
+            rig.settle()
+        self.assertEqual(rig.link.counters()["handler_errors"], 1)
+        self.assertEqual([line for line in logs.output if "bug" in line], [])                 # the type is logged, never the text
+        self.assertEqual(rig.sim.get("/now-playing").status, 200)
+
     def test_a_broken_sink_does_not_break_the_link(self):
         def boom(kind, line):
             raise RuntimeError("sink")
@@ -1225,6 +1234,16 @@ class Threads(unittest.TestCase):
         time.sleep(0.3)
         self.assertGreaterEqual(link.counters()["queue_full"], 10)
         self.monitor.artwork_gate.set()
+
+    def test_a_crashed_reader_closes_the_link_so_the_manager_can_reconnect(self):
+        link = self.start_link()
+        self.connect(link)
+        with mock.patch.object(Link, "pump", side_effect=RuntimeError("bug")), self.assertLogs("usb", "WARNING"):
+            end = time.monotonic() + 3
+            while not link.closed and time.monotonic() < end:
+                time.sleep(0.01)
+        self.assertTrue(link.closed)
+        self.assertEqual(link.close_reason, "reader failed (RuntimeError)")
 
     def test_close_stops_both_threads_promptly(self):
         link = self.start_link()
