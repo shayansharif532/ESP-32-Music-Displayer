@@ -784,6 +784,7 @@ void ui_init(ui_cmd_cb_t cb, void *ctx)
     lv_indev_set_display(vt, lv_display_get_default());
 #endif
 
+    ui_link_init(scr);                                  /* the connection / onboarding overlay (ui_link.c), topmost child of the player screen */
     s.ready = true;
     bsp_display_unlock();
 }

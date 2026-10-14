@@ -1,7 +1,7 @@
 /*
  * Development-only helpers, compiled only with  idf.py -DAPP_DEV_TOOLS=1 build  (never in the product build).
  *
- * "screenshot": renders the LVGL screen into RAM and sends it over the USB serial console as base64 lines
+ * "screenshot": renders the LVGL screen into RAM and sends it over the USB link (as LOG frames; the companion hands them to the test tool) as base64 lines
  *     SHOT_BEGIN <w> <h> <stride> <format>
  *     S<index> <base64 of 192 raw bytes>      (raw RGB565, little endian)
  *     SHOT_END <crc32-of-raw-bytes>
@@ -14,6 +14,8 @@
  */
 #ifdef APP_DEV_TOOLS
 
+#include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -25,14 +27,31 @@
 #include "mbedtls/base64.h"
 
 #include "bsp/esp-bsp.h"
+#include "cJSON.h"
 #include "dev_tools.h"
+#include "dmlink.h"
+#include "idle_date.h"
+#include "idle_screen.h"
 #include "side_keys.h"
 #include "lvgl.h"
 #include "ui.h"
+#include "usb_link.h"
 
 static const char *TAG = "dev_tools";
 
 #define CHUNK 192
+
+/* One text line to the test tool, through the USB link (the native port carries frames only, so printf cannot be used). Unlike a log
+ * line it waits for the host instead of being dropped: a missing line would ruin the picture. */
+static void out(const char *fmt, ...)
+{
+    char line[CHUNK / 3 * 4 + 40];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    usb_link_log_line(line);
+}
 
 static void send_screenshot(void)
 {
@@ -53,7 +72,7 @@ static void send_screenshot(void)
     uint32_t crc = esp_rom_crc32_le(0, raw, total);
     esp_log_level_set("*", ESP_LOG_NONE);                  /* no log lines in the middle of the picture */
     vTaskDelay(pdMS_TO_TICKS(30));
-    printf("SHOT_BEGIN %u %u %u %u\n", (unsigned)w, (unsigned)h, (unsigned)stride, (unsigned)buf->header.cf);
+    out("SHOT_BEGIN %u %u %u %u\n", (unsigned)w, (unsigned)h, (unsigned)stride, (unsigned)buf->header.cf);
     char line[CHUNK / 3 * 4 + 8];
     unsigned idx = 0;
     for (size_t off = 0; off < total; off += CHUNK, idx++) {
@@ -61,13 +80,9 @@ static void send_screenshot(void)
         size_t outlen = 0;
         mbedtls_base64_encode((unsigned char *)line, sizeof line, &outlen, raw + off, n);
         line[outlen] = '\0';
-        printf("S%u %s\n", idx, line);
-        if ((idx & 1) == 1) {
-            vTaskDelay(1);                                  /* let the USB host drain its FIFO */
-        }
+        out("S%u %s\n", idx, line);
     }
-    printf("SHOT_END %u\n", (unsigned)crc);
-    fflush(stdout);
+    out("SHOT_END %u\n", (unsigned)crc);
     esp_log_level_set("*", ESP_LOG_INFO);
     lv_draw_buf_destroy(buf);
     ESP_LOGI(TAG, "screenshot sent: %ux%u, %u bytes", (unsigned)w, (unsigned)h, (unsigned)total);
@@ -77,6 +92,42 @@ static void shot_task(void *arg)
 {
     (void)arg;
     send_screenshot();
+    vTaskDelete(NULL);
+}
+
+/* "idle_cfg {json}": show the idle screen with exactly this configuration and clock, no companion involved:
+ *   {"clock_ms":1791849600000,"theme":"neon","accent":"#FF4FA3","clock":true,"clock_24h":false,"date":true,"date_fmt":1,"text":"Hello"}
+ * (the keys of the companion's GET /idle; clock_ms = the PC's local time as milliseconds). It is stored like a real sync (the companion
+ * replaces it at its next settings version), so tests that use it end by letting the companion send its own settings. */
+static void idle_cfg_task(void *arg)
+{
+    char *json = arg;
+    cJSON *j = cJSON_Parse(json);
+    if (j) {
+        const cJSON *ms = cJSON_GetObjectItemCaseSensitive(j, "clock_ms");
+        cJSON_DeleteItemFromObjectCaseSensitive(j, "version");
+        cJSON_DeleteItemFromObjectCaseSensitive(j, "ok");
+        cJSON_AddBoolToObject(j, "ok", true);
+        cJSON_AddNumberToObject(j, "version", 99999);
+        char *cfg = cJSON_PrintUnformatted(j);
+        if (cfg) {
+            if (cJSON_IsNumber(ms)) {
+                idle_screen_set_clock((int64_t)ms->valuedouble);
+            }
+            const int rc = idle_screen_apply_config(cfg, strlen(cfg));
+            ESP_LOGI(TAG, "idle_cfg applied (rc %d)", rc);
+            if (bsp_display_lock(2000)) {
+                idle_screen_activate(true);
+                lv_screen_load(idle_screen_obj());
+                bsp_display_unlock();
+            }
+            cJSON_free(cfg);
+        }
+        cJSON_Delete(j);
+    } else {
+        ESP_LOGW(TAG, "idle_cfg: the JSON could not be parsed");
+    }
+    free(json);
     vTaskDelete(NULL);
 }
 
@@ -194,6 +245,14 @@ void dev_tools_handle(const char *what)
 {
     if (strcmp(what, "screenshot") == 0) {
         xTaskCreatePinnedToCore(shot_task, "shot", 6144, NULL, 2, NULL, 0);
+    } else if (strcmp(what, "selftest") == 0) {                 /* the on-target self-tests of the pure code, reported in the log */
+        const char *a = dm_selftest(), *b = idle_date_selftest();
+        ESP_LOGI(TAG, "selftest dmlink: %s | idle date: %s", a ? a : "ok", b ? b : "ok");
+    } else if (strncmp(what, "idle_cfg ", 9) == 0) {
+        char *copy = strdup(what + 9);
+        if (copy && xTaskCreatePinnedToCore(idle_cfg_task, "idle_cfg", 6144, copy, 2, NULL, 0) != pdPASS) {
+            free(copy);
+        }
     } else if (strcmp(what, "pair_shot") == 0) {
         xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {

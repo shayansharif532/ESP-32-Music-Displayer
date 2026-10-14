@@ -62,34 +62,6 @@ static void resp_reset(pc_resp_t *r)
     }
 }
 
-static bool buf_append(pc_buf_t *b, const void *data, size_t n)
-{
-    if (b->len + n + 1 > b->max) {
-        b->truncated = true;
-        return false;
-    }
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 2048;
-        while (cap < b->len + n + 1) {
-            cap *= 2;
-        }
-        if (cap > b->max) {
-            cap = b->max;
-        }
-        char *p = heap_caps_realloc(b->data, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!p) {
-            b->truncated = true;
-            return false;
-        }
-        b->data = p;
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, data, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-    return true;
-}
-
 /* Only the two protocol headers are looked at; both are validated here, so a hostile value can never be longer than its buffer. */
 static esp_err_t on_event(esp_http_client_event_t *evt)
 {
@@ -238,7 +210,7 @@ static esp_err_t exchange(const char *host, uint16_t port, const char *pq, bool 
             total += n;
             if (mbedtls_sha256_update(&sc, s_chunk, (size_t)n) != 0) {
                 err = ESP_FAIL;
-            } else if (!buf_append(&resp->body, s_chunk, (size_t)n)) {
+            } else if (!usb_link_buf_append(&resp->body, s_chunk, (size_t)n)) {
                 err = ESP_ERR_INVALID_SIZE;                       /* too big (or no memory): truncated flag is set */
             }
         }

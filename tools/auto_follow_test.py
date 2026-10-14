@@ -107,7 +107,7 @@ def start(app, paused):
 
 def main() -> int:
     data_dir = tempfile.mkdtemp(prefix="auto-follow-test-")             # own settings / pairing store: nothing is written to the real one
-    comp = subprocess.Popen([fakes.VENV_PY, "-m", "desk_media_companion", "--port", str(PORT), "--no-discovery", "--quiet",
+    comp = subprocess.Popen([fakes.VENV_PY, "-m", "desk_media_companion", "--lan", "--no-usb", "--port", str(PORT), "--no-discovery", "--quiet",
                              "--only-apps", f"{A},{B}", "--treat-as-spotify", A, "--data-dir", data_dir],
                             cwd=os.path.join(ROOT, "companion"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

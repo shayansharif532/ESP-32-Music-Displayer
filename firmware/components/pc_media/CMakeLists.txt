@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "pc_media.c" "pc_http.c" "pc_art.c" "pc_auth.c"
     INCLUDE_DIRS "include"
-    REQUIRES lvgl__lvgl esp_http_client
-    PRIV_REQUIRES json lwip heap log freertos esp_timer wifi_mgr espressif__esp_jpeg mbedtls nvs_flash esp_hw_support)
+    REQUIRES lvgl__lvgl esp_http_client usb_link
+    PRIV_REQUIRES json lwip heap log freertos esp_timer wifi_mgr espressif__esp_jpeg mbedtls nvs_flash esp_hw_support esp_app_format bootloader_support)

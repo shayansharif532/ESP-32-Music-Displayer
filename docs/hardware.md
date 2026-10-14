@@ -26,8 +26,40 @@ Everything below was cross-checked from independent sources. Evidence tags:
 | Flash | 16 MB, **quad** (4 data lines), 3.3 V (VDD_SPI forced to 3.3 V by eFuse); JEDEC mfg 0x46 / dev 0x4018; app uses QIO |
 | PSRAM | 8 MB **octal**, vendor AP_3v3, 85 °C grade; passes the SPI SRAM memory test at boot. Waveshare's official example runs it at 80 MHz (`CONFIG_SPIRAM_MODE_OCT` + `CONFIG_SPIRAM_SPEED_80M`) |
 | Security | secure boot OFF, flash encryption OFF, JTAG/USB-JTAG/download mode all enabled, eFuses untouched |
-| USB | two USB-C ports. **Native USB** (ESP32-S3 USB-Serial/JTAG, `VID_303A PID_1001`, enumerates as a COM port whose number differs per computer: `toolsind-board.ps1` prints it) is the one in use. The second port is a USB-to-UART bridge (UART0). Native port console only streams while the host asserts **DTR** — `idf.py monitor` does this; a raw serial tool must too |
+| USB | two USB-C ports. **Native USB** (ESP32-S3 USB-Serial/JTAG, `VID_303A PID_1001`, enumerates as a COM port whose number differs per computer: `tools\find-board.ps1` prints it) carries the **DMLINK** protocol to the PC (see "USB link" below) and is also what `esptool` / `idf.py` flash through. The second port is a USB-to-UART bridge on UART0: since the USB-first release it is the firmware's **console** (log, panic output) and a second way to power the board; it carries no protocol. |
 | Buttons | **BOOT** (GPIO0) and **PWR** (AXP2101 PWRON). There is **no RESET button**. Both are the two "side buttons" on one board edge; this project uses them as volume down (BOOT, lower) / volume up (PWR, upper) - see "Side buttons" below. |
+
+## USB link [board, measured 2026-10-13]
+
+The ESP32-S3's USB-Serial/JTAG controller is a fixed-function device implemented in hardware (ESP-IDF docs: it "cannot be reconfigured to perform
+any function other than a serial port and JTAG debugging"). On the reference unit Windows 10 enumerates one **composite device**:
+
+| Interface | Function | Windows driver |
+|---|---|---|
+| 0 (and 1) | **CDC-ACM serial port** | inbox `usbser` (Class `Ports`, "USB Serial Device (COMn)"): no driver to install |
+| 2 | JTAG debug unit (vendor class) | `WinUSB` (inbox), unused by this project |
+
+Measured with a throw-away firmware and a PC-side script (CDC at 115200 8N1 on paper; the baud rate is ignored by the hardware; DTR and RTS low):
+
+| Property | Result |
+|---|---|
+| Throughput display to PC | **~900 KB/s** sustained (1 MiB in 1.13 s, data verified) |
+| Throughput PC to display | **~500 KB/s** (256 KiB with a CRC check, 64 / 512 / 4096-byte writes alike) |
+| Round trip | median **0.10 ms**, 99th percentile 0.2 ms |
+| A 160 KB cover over the real link layer | **~0.37 s** end to end including the PC's chunked writes |
+| Opening / closing the port | does **not** reset the board (also not with the Windows default DTR = RTS = 1 on this unit, but the companion never relies on that) |
+| Software reset (`esp_restart`) | the port **stays enumerated** (no disconnect, the handle stays valid); the application is back after ~0.6 s |
+| Host not reading | writes queue in the driver ring and then time out; nothing blocks forever |
+| "Is a PC data connection present?" | `usb_serial_jtag_is_connected()` is true while the host's start-of-frame packets arrive; the ESP-IDF documentation states a power bank never counts: a **charge-only cable reads as "no host"** (this is what the "No USB data" screen reports) |
+| Mass-storage volume next to the serial port | not possible with this controller (it would need USB-OTG / TinyUSB on the same two pins, which removes the USB-Serial/JTAG function, the auto-reset flashing and the JTAG) |
+
+**Flashing and recovery are unchanged.** `esptool` / `idf.py flash` use the same controller (DTR / RTS auto-reset), and the hardware download mode (hold **BOOT**
+while the board powers up, e.g. plug the cable in with BOOT pressed) does not depend on the application at all. The firmware keeps the USB-Serial/JTAG
+controller enabled and never sleeps the USB PHY. Software that opens the port must keep **RTS low** (an RTS edge resets the chip; DTR level at that edge
+selects the boot mode); the companion sets DTR and RTS low before opening the port and never changes them.
+
+The firmware console is on **UART0** (the second USB-C connector, 115200 baud): the native port carries binary frames only, so no text may share it. For
+development the log is also forwarded over the link (`LOG` frames) and appears in the companion's log file.
 
 ## Peripherals
 

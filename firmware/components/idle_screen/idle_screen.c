@@ -1,4 +1,4 @@
-/* The idle screen (see idle_screen.h): themes, clock, custom line, background picture, persistence, sync with the companion.
+/* The idle screen (see idle_screen.h): themes, clock, date, custom line, background picture, persistence, sync with the companion.
  *
  * Cost model (this runs next to Wi-Fi and the player): the background is one pre-baked RGB565 image in PSRAM (a dithered gradient
  * generated here for Minimal / Dark / Neon, or the companion's JPEG decoded once for Photo), so LVGL only blits it. Nothing animates
@@ -23,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "idle_date.h"
 #include "jpeg_decoder.h"
 #include "nvs.h"
 
@@ -36,7 +37,8 @@ extern const lv_font_t idle_font_clock;               /* font_clock.c (generated
 
 #define NVS_NS              "idle"
 #define NVS_KEY             "cfg"
-#define CFG_MAGIC           0x49444C31U               /* "IDL1" */
+#define CFG_MAGIC           0x49444C32U               /* "IDL2": IDL1 + the date options (an IDL1 blob is migrated, see nvs_load_cfg) */
+#define CFG_MAGIC_V1        0x49444C31U
 #define PART_LABEL          "idle_img"
 #define PART_SUBTYPE        0x40
 #define IMG_MAGIC           0x31494449U               /* "IDI1" */
@@ -61,8 +63,16 @@ typedef struct {                                      /* what is kept in NVS (an
     uint32_t img_crc, img_size;                       /* the background picture (size 0 = none) */
     uint16_t delay_s;
     uint8_t theme, bg_mode, show_clock, clock_24h;
+    uint8_t show_date, date_fmt;                      /* IDLE_DATE_FMT_* */
     char text[TEXT_MAX + 1];
 } idle_cfg_t;
+
+typedef struct {                                      /* the stored layout of the first release (IDL1) */
+    uint32_t magic, version, accent, img_crc, img_size;
+    uint16_t delay_s;
+    uint8_t theme, bg_mode, show_clock, clock_24h;
+    char text[TEXT_MAX + 1];
+} idle_cfg_v1_t;
 
 typedef struct {                                      /* first sector of the idle_img partition */
     uint32_t magic, size, crc;
@@ -80,7 +90,7 @@ static struct {
     idle_tap_cb_t tap;
     void *tap_ctx;
 
-    lv_obj_t *scr, *bg, *dim, *dot, *conn, *clock, *shadow[4], *ampm, *line, *text, *tshadow, *status;
+    lv_obj_t *scr, *bg, *dim, *dot, *conn, *clock, *shadow[4], *ampm, *line, *text, *tshadow, *status, *date, *dshadow[4];
     lv_image_dsc_t dsc[4];                            /* rotated so a new buffer always has a new source pointer */
     int dsc_next;
     uint16_t *bg_px;                                  /* generated theme background currently on screen (NULL when the photo is) */
@@ -91,10 +101,12 @@ static struct {
     int64_t clock_base_ms;                            /* local time minus esp_timer time, 0 = never synced */
     portMUX_TYPE clock_mux;
     char shown_clock[8];
+    char shown_date[20];
     char status_text[48];
 } s = { .clock_mux = portMUX_INITIALIZER_UNLOCKED };
 
 static const int8_t RING[4][2] = { { -3, 0 }, { 3, 0 }, { 0, -3 }, { 0, 3 } };
+static const int8_t DRING[4][2] = { { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 } };      /* the date's outline / glow is a little tighter than the clock's */
 
 /* ---- small helpers ----------------------------------------------------------------------------------------- */
 
@@ -121,13 +133,15 @@ static void cfg_defaults(idle_cfg_t *c)
     c->theme = TH_DARK;
     c->show_clock = 1;
     c->clock_24h = 1;
+    c->show_date = 1;
+    c->date_fmt = IDLE_DATE_FMT_MON_D_Y;
     c->delay_s = DELAY_DEFAULT_S;
 }
 
 static bool cfg_sane(const idle_cfg_t *c)
 {
     return c->magic == CFG_MAGIC && c->theme <= TH_PHOTO && c->delay_s >= DELAY_MIN_S && c->delay_s <= DELAY_MAX_S &&
-           c->img_size <= IMG_MAX_BYTES && c->text[TEXT_MAX] == '\0';
+           c->img_size <= IMG_MAX_BYTES && c->text[TEXT_MAX] == '\0' && c->date_fmt < IDLE_DATE_FMT_COUNT && c->show_date <= 1;
 }
 
 /* ---- persistence --------------------------------------------------------------------------------------------- */
@@ -138,10 +152,35 @@ static bool nvs_load_cfg(idle_cfg_t *c)
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    size_t len = sizeof *c;
-    esp_err_t err = nvs_get_blob(h, NVS_KEY, c, &len);
+    size_t len = 0;
+    esp_err_t err = nvs_get_blob(h, NVS_KEY, NULL, &len);       /* the size says which layout was stored */
+    bool ok = false;
+    if (err == ESP_OK && len == sizeof *c) {
+        len = sizeof *c;
+        ok = nvs_get_blob(h, NVS_KEY, c, &len) == ESP_OK && len == sizeof *c && cfg_sane(c);
+    } else if (err == ESP_OK && len == sizeof(idle_cfg_v1_t)) {  /* a first-release blob: keep every setting, the date gets its defaults */
+        idle_cfg_v1_t old;
+        len = sizeof old;
+        if (nvs_get_blob(h, NVS_KEY, &old, &len) == ESP_OK && len == sizeof old && old.magic == CFG_MAGIC_V1) {
+            cfg_defaults(c);
+            c->version = old.version;
+            c->accent = old.accent;
+            c->img_crc = old.img_crc;
+            c->img_size = old.img_size;
+            c->delay_s = old.delay_s;
+            c->theme = old.theme;
+            c->bg_mode = old.bg_mode;
+            c->show_clock = old.show_clock;
+            c->clock_24h = old.clock_24h;
+            memcpy(c->text, old.text, sizeof c->text);
+            ok = cfg_sane(c);
+            if (ok) {
+                ESP_LOGI(TAG, "stored settings migrated from the first release layout");
+            }
+        }
+    }
     nvs_close(h);
-    return err == ESP_OK && len == sizeof *c && cfg_sane(c);
+    return ok;
 }
 
 static void nvs_save_cfg(const idle_cfg_t *c)
@@ -328,10 +367,10 @@ static void update_clock_text(void)
     portENTER_CRITICAL(&s.clock_mux);
     base = s.clock_base_ms;
     portEXIT_CRITICAL(&s.clock_mux);
-    char txt[8] = "";
+    char txt[8] = "", dtxt[sizeof s.shown_date] = "";
     const char *ap = "";
     if (base != 0) {
-        const int64_t local = base + now_ms();
+        const int64_t local = base + now_ms();                /* the PC's local time: its own offset (time zone, daylight saving) is already in it */
         const int sec = (int)((local / 1000) % 86400);
         const int h = sec / 3600, m = (sec / 60) % 60;
         if (s.cfg.clock_24h) {
@@ -340,18 +379,27 @@ static void update_clock_text(void)
             snprintf(txt, sizeof txt, "%d:%02d", h % 12 == 0 ? 12 : h % 12, m);
             ap = h < 12 ? "AM" : "PM";
         }
+        if (s.cfg.show_date) {                                /* changes at local midnight with no help from the PC: the same running timer */
+            idle_format_clock_date(dtxt, sizeof dtxt, local, s.cfg.date_fmt);
+        }
     }
-    if (strcmp(txt, s.shown_clock) == 0) {
-        return;
+    if (strcmp(txt, s.shown_clock) != 0) {
+        strlcpy(s.shown_clock, txt, sizeof s.shown_clock);
+        lv_label_set_text(s.clock, txt);
+        for (int i = 0; i < 4; i++) {
+            lv_label_set_text(s.shadow[i], txt);
+        }
+        lv_label_set_text(s.ampm, ap);
+        lv_obj_update_layout(s.clock);
+        lv_obj_align_to(s.ampm, s.clock, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -(idle_font_clock.base_line - 8));
     }
-    strlcpy(s.shown_clock, txt, sizeof s.shown_clock);
-    lv_label_set_text(s.clock, txt);
-    for (int i = 0; i < 4; i++) {
-        lv_label_set_text(s.shadow[i], txt);
+    if (strcmp(dtxt, s.shown_date) != 0) {
+        strlcpy(s.shown_date, dtxt, sizeof s.shown_date);
+        lv_label_set_text(s.date, dtxt);
+        for (int i = 0; i < 4; i++) {
+            lv_label_set_text(s.dshadow[i], dtxt);
+        }
     }
-    lv_label_set_text(s.ampm, ap);
-    lv_obj_update_layout(s.clock);
-    lv_obj_align_to(s.ampm, s.clock, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -(idle_font_clock.base_line - 8));
 }
 
 static void tick_cb(lv_timer_t *t)
@@ -412,7 +460,7 @@ static void commit_theme(uint16_t *new_bg, uint8_t eff)
     heap_caps_free(old_bg);
 
     const uint32_t acc = s.cfg.accent;
-    const bool clock = s.cfg.show_clock, text = s.cfg.text[0] != '\0';
+    const bool clock = s.cfg.show_clock, text = s.cfg.text[0] != '\0', date = s.cfg.show_date != 0;
     const bool neon = eff == TH_NEON, photo = eff == TH_PHOTO, minimal = eff == TH_MINIMAL;
 
     lv_obj_set_style_bg_color(s.dot, lv_color_hex(acc), 0);
@@ -436,6 +484,16 @@ static void commit_theme(uint16_t *new_bg, uint8_t eff)
             lv_obj_add_flag(s.shadow[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+    for (int i = 0; i < 4; i++) {                         /* the date gets the same treatment, a little tighter */
+        lv_obj_set_style_text_color(s.dshadow[i], neon ? lv_color_hex(acc) : lv_color_black(), 0);
+        lv_obj_set_style_text_opa(s.dshadow[i], neon ? 46 : 110, 0);
+        if (date && (neon || photo)) {
+            lv_obj_remove_flag(s.dshadow[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s.dshadow[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (date) lv_obj_remove_flag(s.date, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.date, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_opa(s.tshadow, 130, 0);
     if (text && photo) {
         lv_obj_remove_flag(s.tshadow, LV_OBJ_FLAG_HIDDEN);
@@ -446,13 +504,22 @@ static void commit_theme(uint16_t *new_bg, uint8_t eff)
     if (clock) lv_obj_remove_flag(s.clock, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.clock, LV_OBJ_FLAG_HIDDEN);
     if (clock && !s.cfg.clock_24h) lv_obj_remove_flag(s.ampm, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s.ampm, LV_OBJ_FLAG_HIDDEN);
 
-    /* layout */
-    int clock_cy = 0, line_y, text_cy = 0;
-    const lv_font_t *text_font = clock ? &lv_font_montserrat_32 : &lv_font_montserrat_48;
-    if (clock && text)      { clock_cy = 168; line_y = 262; text_cy = 306; }
-    else if (clock)         { clock_cy = 205; line_y = 300; }
-    else if (text)          { text_cy = 215;  line_y = 268; }
-    else                    { line_y = 240; }
+    /* layout (480 x 480): vertical centres of the clock digits, the date and the custom line, and the top of the accent line. The same
+     * numbers are in the companion's preview (idle.py), see docs/idle-screen.md. */
+    int clock_cy = 0, date_cy = 0, line_y, text_cy = 0;
+    const lv_font_t *text_font = (clock || date) ? &lv_font_montserrat_32 : &lv_font_montserrat_48;
+    const lv_font_t *date_font = clock ? &lv_font_montserrat_26 : &lv_font_montserrat_48;
+    if (date) {
+        if (clock && text)      { clock_cy = 138; date_cy = 214; line_y = 252; text_cy = 300; }
+        else if (clock)         { clock_cy = 172; date_cy = 252; line_y = 296; }
+        else if (text)          { date_cy = 178;  line_y = 236; text_cy = 290; }
+        else                    { date_cy = 215;  line_y = 262; }
+    } else {
+        if (clock && text)      { clock_cy = 168; line_y = 262; text_cy = 306; }
+        else if (clock)         { clock_cy = 205; line_y = 300; }
+        else if (text)          { text_cy = 215;  line_y = 268; }
+        else                    { line_y = 240; }
+    }
     lv_obj_set_style_text_font(s.text, text_font, 0);
     lv_obj_set_style_text_font(s.tshadow, text_font, 0);
     lv_label_set_text(s.text, s.cfg.text);
@@ -464,11 +531,19 @@ static void commit_theme(uint16_t *new_bg, uint8_t eff)
         lv_obj_align(s.shadow[i], LV_ALIGN_TOP_MID, RING[i][0], clock_top + RING[i][1]);
     }
     lv_obj_align(s.line, LV_ALIGN_TOP_MID, 0, line_y);
+    lv_obj_set_style_text_font(s.date, date_font, 0);
+    const int dh = lv_font_get_line_height(date_font);
+    lv_obj_align(s.date, LV_ALIGN_TOP_MID, 0, date_cy - dh / 2);
+    for (int i = 0; i < 4; i++) {
+        lv_obj_set_style_text_font(s.dshadow[i], date_font, 0);
+        lv_obj_align(s.dshadow[i], LV_ALIGN_TOP_MID, DRING[i][0], date_cy - dh / 2 + DRING[i][1]);
+    }
     const int th = lv_font_get_line_height(text_font);
     lv_obj_align(s.text, LV_ALIGN_TOP_MID, 0, text_cy - th / 2);
     lv_obj_align(s.tshadow, LV_ALIGN_TOP_MID, 0, text_cy - th / 2 + 2);
 
     s.shown_clock[0] = '\0';                              /* force the clock label to be rewritten in the (possibly new) format */
+    s.shown_date[0] = '\0';
     update_clock_text();
 }
 
@@ -552,6 +627,16 @@ void idle_screen_init(idle_tap_cb_t on_tap_cb, void *ctx)
     }
     s.clock = mk_label(&idle_font_clock, 0xFFFFFF);
     s.ampm = mk_label(&lv_font_montserrat_26, 0xDADAE4);
+    for (int i = 0; i < 4; i++) {                          /* the date: an outline / glow (Photo, Neon) behind a light label */
+        s.dshadow[i] = mk_label(&lv_font_montserrat_26, 0x000000);
+    }
+    s.date = mk_label(&lv_font_montserrat_26, 0xE6E6EE);
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *l = i < 4 ? s.dshadow[i] : s.date;
+        lv_obj_set_width(l, 440);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);   /* never wraps: even the widest format fits 440 px at 48 px */
+    }
     s.line = lv_obj_create(s.scr);
     lv_obj_remove_style_all(s.line);
     lv_obj_set_size(s.line, 64, 3);
@@ -589,6 +674,16 @@ void idle_screen_init(idle_tap_cb_t on_tap_cb, void *ctx)
     lv_timer_pause(s.tick);
     bsp_display_unlock();
 
+#ifdef APP_DEV_TOOLS
+    {
+        const char *bad = idle_date_selftest();
+        if (bad) {
+            ESP_LOGE(TAG, "idle date selftest FAILED: %s", bad);
+        } else {
+            ESP_LOGI(TAG, "idle date selftest ok");
+        }
+    }
+#endif
     xTaskCreatePinnedToCore(load_task, "idle_load", 8192, NULL, 3, NULL, 0);
 }
 
@@ -681,6 +776,10 @@ static bool parse_config(const char *json, size_t len, idle_cfg_t *n)
         n->show_clock = cJSON_IsFalse(v) ? 0 : 1;
         v = cJSON_GetObjectItemCaseSensitive(j, "clock_24h");
         n->clock_24h = cJSON_IsFalse(v) ? 0 : 1;
+        v = cJSON_GetObjectItemCaseSensitive(j, "date");                    /* an older companion sends none: the date defaults to shown */
+        n->show_date = cJSON_IsFalse(v) ? 0 : 1;
+        v = cJSON_GetObjectItemCaseSensitive(j, "date_fmt");
+        n->date_fmt = (cJSON_IsNumber(v) && v->valuedouble >= 0 && v->valuedouble < IDLE_DATE_FMT_COUNT) ? (uint8_t)v->valuedouble : IDLE_DATE_FMT_MON_D_Y;
         v = cJSON_GetObjectItemCaseSensitive(j, "delay_s");
         if (cJSON_IsNumber(v)) {
             n->delay_s = (uint16_t)clampi((int)v->valuedouble, DELAY_MIN_S, DELAY_MAX_S);
@@ -717,8 +816,8 @@ static void finish_apply(const idle_cfg_t *n)
     s.cfg = *n;
     nvs_save_cfg(&s.cfg);
     rebuild_theme();
-    ESP_LOGI(TAG, "idle settings version %u applied (theme %u, %s clock, %s)", (unsigned)n->version, (unsigned)n->theme,
-             n->show_clock ? (n->clock_24h ? "24h" : "12h") : "no", n->img_size ? "picture" : "no picture");
+    ESP_LOGI(TAG, "idle settings version %u applied (theme %u, %s clock, date %s/%u, %s)", (unsigned)n->version, (unsigned)n->theme,
+             n->show_clock ? (n->clock_24h ? "24h" : "12h") : "no", n->show_date ? "on" : "off", (unsigned)n->date_fmt, n->img_size ? "picture" : "no picture");
 }
 
 int idle_screen_apply_config(const char *json, size_t len)

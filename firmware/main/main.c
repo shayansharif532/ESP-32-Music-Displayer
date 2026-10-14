@@ -1,18 +1,19 @@
 /*
- * Desk media display - application entry point and glue.
+ * DeskMedia Display - application entry point and glue.
  *
- *   wifi_mgr  -> network                      pc_media -> finds the Windows companion, polls now-playing, artwork, controls
- *   ui        -> LVGL Now Playing screen      this file -> turns media/Wi-Fi events into UI calls and UI taps into commands
+ *   usb_link  -> the USB cable to the PC      pc_media -> finds the Windows companion, polls now-playing, artwork, controls
+ *   ui        -> LVGL Now Playing screen      this file -> turns media / link events into UI calls and UI taps into commands
+ *   wifi_mgr  -> optional LAN fallback (only when credentials are compiled in for development; the product runs with Wi-Fi off)
  *
- * Without developer credentials in firmware/secrets.local.h the firmware runs the UI-only demo player instead.
  * The display/LVGL start-up is owned here (instead of the stock bsp_display_start()) so the LVGL task gets a
- * larger stack and is pinned away from the Wi-Fi core; see docs/development-history/M1-lcd-touch.md.
+ * larger stack and is pinned away from the network core; see docs/development-history/M1-lcd-touch.md.
  */
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -106,6 +107,7 @@ static char s_source[32];            /* friendly name of the app that is playing
 
 static lv_obj_t *s_player_scr;
 static bool s_have_session;          /* the PC has a (maybe paused) media session */
+static bool s_have_session_or_idle;  /* a companion has answered since boot (the idle screen is meaningful) */
 static bool s_idle_selected;         /* the user swiped onto the idle screen (the companion's MANUAL_TEMP selection "idle") */
 static volatile uint32_t s_leave_idle_until;   /* (uint32 ms) after a tap that left the idle selection: ignore the (stale) selection report until then */
 static int64_t s_last_playing_ms;    /* when something last played; 0 = not since connecting */
@@ -259,9 +261,35 @@ static void link_message(const char *l1, const char *l2)
     show_screen(false);
 }
 
+/* The connection / onboarding overlay (ui_link.c): the player screen is brought forward and covered by it. */
+static void link_overlay(ui_link_kind_t kind, const char *pc_name)
+{
+    s_shown_track[0] = '\0';
+    s_idle_shown = true;
+    s_link_idle = true;
+    s_last_playing_ms = 0;
+    s_peek_until = 0;
+    ui_show_idle("", "");                                    /* nothing of a previous track shows through */
+    ui_link_show(kind, DM_SETUP_URL, DM_SETUP_URL_SHORT, pc_name);
+    show_screen(false);
+}
+
+/* The idle screen may stay up through a short reconnect (the companion restarting): its clock and date keep running, and the status
+ * line says what is going on. Only a longer outage brings the overlay (pc_media decides when). */
+static bool reconnecting_on_idle(void)
+{
+    if (!s_idle_visible || !s_have_session_or_idle) {
+        return false;
+    }
+    idle_screen_set_status("Reconnecting to your PC...");
+    return true;
+}
+
 static void on_state(const pc_media_state_t *st, void *ctx)
 {
     (void)ctx;
+    ui_link_hide();                                          /* talking to the companion again: no connection message */
+    s_have_session_or_idle = true;
     idle_screen_set_clock(st->clock_ms);
     s_have_session = st->has_session;
     s_idle_selected = st->idle_selected && (int32_t)(s_leave_idle_until - (uint32_t)now_ms()) <= 0;
@@ -316,8 +344,9 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
 {
     (void)ctx;
     switch (st) {
-    case PC_MEDIA_WAITING_NETWORK:
+    case PC_MEDIA_WAITING_NETWORK:                         /* (only with a compiled-in Wi-Fi fallback) */
         ui_set_status(UI_STATUS_INFO, "Connecting to Wi-Fi...");
+        ui_link_hide();
         if (!s_shown_track[0]) {
             link_message("Connecting...", "");
         } else {
@@ -326,25 +355,31 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
         break;
     case PC_MEDIA_SEARCHING:
         ui_set_status(UI_STATUS_INFO, "Looking for your PC...");
+        ui_link_hide();
         if (!s_shown_track[0]) {
-            link_message("Looking for your PC", "Is Desk Media Companion running on it?");
+            link_message("Looking for your PC", "Is DeskMedia Companion running on it?");
         } else {
             show_screen(false);
         }
         break;
     case PC_MEDIA_CONNECTED: {                         /* detail = the Windows app id of the session */
+        ui_link_hide();
         char src[sizeof s_source];
         friendly_source(detail, src, sizeof src);
         ui_set_status(UI_STATUS_INFO, src);
         break;
     }
     case PC_MEDIA_NO_SESSION:
+        ui_link_hide();
         ui_set_status(UI_STATUS_INFO, "");
         break;
     case PC_MEDIA_UNREACHABLE:
         ui_set_status(UI_STATUS_WARN, "Can't reach your PC");
+        if (reconnecting_on_idle()) {
+            break;                                           /* the idle screen (clock, date) stays up while it reconnects */
+        }
         if (!s_shown_track[0]) {
-            link_message("Can't reach your PC", "Is it on, and is Desk Media Companion running?");
+            link_message("Can't reach your PC", "Is it on, and is DeskMedia Companion running?");
         } else {
             s_last_playing_ms = 0;
             s_peek_until = 0;
@@ -353,13 +388,31 @@ static void on_status(pc_media_status_t st, const char *detail, void *ctx)
         break;
     case PC_MEDIA_NEEDS_PAIRING:                           /* the PC answers, this display holds no key (only /hello is polled) */
         ui_set_status(UI_STATUS_INFO, "Not paired");
-        link_message("Not paired", "On your PC: tray icon > Pair a display");
+        link_overlay(UI_LINK_PAIRING_WAIT, detail);
         break;
     case PC_MEDIA_PAIRING:                                 /* the code prompt is up (ui_pairing owns the screen) */
         break;
     case PC_MEDIA_PAIRING_LOST:                            /* the PC no longer accepts the stored key */
         ui_set_status(UI_STATUS_WARN, "Pairing lost");
-        link_message("Pairing lost", "On your PC: tray icon > Pair a display");
+        link_overlay(UI_LINK_PAIRING_LOST, detail);
+        break;
+    case PC_MEDIA_NO_USB_DATA:                             /* powered but no data: charge-only cable, charger, hub without data */
+        ui_set_status(UI_STATUS_WARN, "No USB data");
+        link_overlay(UI_LINK_NO_USB_DATA, NULL);
+        break;
+    case PC_MEDIA_USB_CONNECTED:                           /* data is there, the companion has not answered (first seconds / restarting) */
+        ui_set_status(UI_STATUS_INFO, "USB connected");
+        if (!reconnecting_on_idle()) {
+            link_overlay(UI_LINK_USB_CONNECTED, NULL);
+        }
+        break;
+    case PC_MEDIA_COMPANION_MISSING:                       /* not installed, or not running */
+        ui_set_status(UI_STATUS_WARN, "DeskMedia Companion not found");
+        link_overlay(UI_LINK_COMPANION_MISSING, NULL);
+        break;
+    case PC_MEDIA_INCOMPATIBLE:
+        ui_set_status(UI_STATUS_WARN, "Update needed");
+        link_overlay(detail && strcmp(detail, "companion") == 0 ? UI_LINK_UPDATE_COMPANION : UI_LINK_UPDATE_FIRMWARE, NULL);
         break;
     }
 }
@@ -412,7 +465,7 @@ static void wifi_selftest_task(void *arg)
 
 /* ------------------------------------------------------------------------------------------------------ */
 
-/* noipa: keep the "no credentials built in" decision at run time so the network code is always compiled AND linked. */
+/* noipa: keep the "are Wi-Fi credentials compiled in" decision at run time so the network code is always compiled AND linked. */
 __attribute__((noipa)) static const char *dev_wifi_ssid(void)
 {
     return DEV_WIFI_SSID;
@@ -420,8 +473,8 @@ __attribute__((noipa)) static const char *dev_wifi_ssid(void)
 
 void app_main(void)
 {
-    const bool network_mode = dev_wifi_ssid()[0] != '\0';
-    ESP_LOGI(TAG, "desk media display starting (%s)", network_mode ? "network mode" : "UI demo mode, no Wi-Fi credentials built in");
+    const bool wifi_configured = dev_wifi_ssid()[0] != '\0';          /* development builds only: the product has no Wi-Fi credentials */
+    ESP_LOGI(TAG, "DeskMedia Display %s starting (USB%s)", esp_app_get_description()->version, wifi_configured ? " + Wi-Fi fallback" : ", Wi-Fi off");
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -443,11 +496,11 @@ void app_main(void)
 
     health_start();                                    /* periodic heap / stack / touch log line */
 
-    if (!network_mode) {
-        ui_init(demo_player_on_ui_cmd, NULL);
-        demo_player_start();
-        return;
-    }
+#ifdef APP_UI_DEMO
+    ui_init(demo_player_on_ui_cmd, NULL);              /* UI development: a scripted fake player, no PC needed */
+    demo_player_start();
+    return;
+#endif
 
     ui_init(on_ui_cmd, NULL);
     ui_show_idle("Starting...", "");
@@ -458,10 +511,13 @@ void app_main(void)
     idle_screen_init(on_idle_tap, NULL);
     ui_attach_vertical_swipes(idle_screen_obj());          /* swipe up / down on the idle screen walks the source ring too */
 
-    ESP_ERROR_CHECK(wifi_mgr_init(on_wifi_state, NULL));
-    ESP_ERROR_CHECK(wifi_mgr_connect(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));
+    if (wifi_configured) {                                 /* optional LAN fallback (development builds) */
+        ESP_ERROR_CHECK(wifi_mgr_init(on_wifi_state, NULL));
+        ESP_ERROR_CHECK(wifi_mgr_connect(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));
+    }
 
     const pc_media_config_t pc = {
+        .lan_enabled = wifi_configured,
         .static_host = DEV_COMPANION_HOST,
         .port = 0,
         .art_max_w = UI_ART_MAX_W,

@@ -1,9 +1,12 @@
 #pragma once
 /*
- * Client for the Windows companion app ("Desk Media Companion", see companion/): finds the PC on the LAN (UDP beacon,
- * or a fixed address), polls GET /now-playing, downloads GET /artwork when it changes, and sends control commands.
- * Plain HTTP on the local network - no accounts, no TLS. The display pairs once with its companion (numeric code compared on both
- * screens, docs/protocol.md section 3) and then signs every request / verifies every answer with the shared key.
+ * Client for the Windows companion app ("DeskMedia Companion", see companion/): finds the PC, polls GET /now-playing, downloads
+ * GET /artwork when it changes, and sends control commands.
+ *
+ * Two transports carry the same API (docs/protocol.md): the USB cable (primary, docs/usb-protocol.md: nothing to configure, works
+ * with Wi-Fi off) and, optionally, the local network (UDP beacon or a fixed address, plain HTTP, only when Wi-Fi is configured).
+ * USB is used whenever a companion answers on it, the LAN otherwise. The display pairs once with its companion (numeric code compared
+ * on both screens, docs/protocol.md section 3); after that a USB link proves the key once per link, a LAN link signs every request.
  *
  * Everything runs in its own tasks; results arrive through the callbacks (called from the poll task, never from LVGL).
  */
@@ -47,7 +50,7 @@ typedef struct {
 } pc_media_state_t;
 
 typedef enum {
-    PC_MEDIA_WAITING_NETWORK,   /* Wi-Fi not up yet */
+    PC_MEDIA_WAITING_NETWORK,   /* Wi-Fi is configured but not up yet (LAN fallback only) */
     PC_MEDIA_SEARCHING,         /* no companion found yet */
     PC_MEDIA_CONNECTED,         /* companion answers and a media session exists */
     PC_MEDIA_NO_SESSION,        /* companion answers, but nothing is playing on the PC */
@@ -55,6 +58,10 @@ typedef enum {
     PC_MEDIA_NEEDS_PAIRING,     /* companion answers, this display holds no key; detail = the PC's name. Nothing but /hello is polled */
     PC_MEDIA_PAIRING,           /* a pairing attempt is running and the code prompt is on screen (on_pair_prompt); detail = the PC's name */
     PC_MEDIA_PAIRING_LOST,      /* a key is stored but the companion no longer accepts it (forgotten on the PC / reinstalled / replaced); detail = PC name */
+    PC_MEDIA_NO_USB_DATA,       /* powered, but no USB data connection for several seconds: a charge-only cable, a charger, or a hub without data */
+    PC_MEDIA_USB_CONNECTED,     /* USB data is there, the companion has not answered yet (the first seconds) */
+    PC_MEDIA_COMPANION_MISSING, /* USB data for a while and still no companion: it is not installed, or not running */
+    PC_MEDIA_INCOMPATIBLE,      /* detail "companion": the PC app is too old for this firmware; "firmware": the firmware is too old for the PC app */
 } pc_media_status_t;
 
 typedef enum {
@@ -100,7 +107,8 @@ typedef struct {
 } pc_media_callbacks_t;
 
 typedef struct {
-    const char *static_host;    /* "192.168.1.50" to skip discovery, or NULL / "" for automatic */
+    bool        lan_enabled;    /* Wi-Fi is configured: also look for the companion on the network (USB works either way) */
+    const char *static_host;    /* "192.168.1.50" to skip discovery, or NULL / "" for automatic (LAN only) */
     uint16_t    port;           /* 0 = PC_MEDIA_DEFAULT_PORT */
     /* The cover is requested from the companion inside this box and keeps its aspect ratio: square art comes back
      * art_max_h x art_max_h, 16:9 art as a landscape card up to art_max_w wide. The companion renders exactly the size drawn. */
