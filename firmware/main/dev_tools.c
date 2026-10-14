@@ -277,7 +277,15 @@ void dev_tools_handle(const char *what)
         xTaskCreatePinnedToCore(shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "selftest") == 0) {                 /* the on-target self-tests of the pure code, reported in the log */
         const char *a = dm_selftest(), *b = idle_date_selftest();
-        ESP_LOGI(TAG, "selftest dmlink: %s | idle date: %s", a ? a : "ok", b ? b : "ok");
+        /* cJSON must refuse deep nesting (a peer's "[[[[..." would otherwise eat the task stack) and still read the shapes this firmware uses */
+        static const char shallow[] = "{\"a\":{\"b\":[1,{\"c\":2}]}}";
+        char deep[48];
+        memset(deep, '[', sizeof deep);
+        cJSON *dj = cJSON_ParseWithLength(deep, sizeof deep), *sj = cJSON_ParseWithLength(shallow, sizeof shallow - 1);
+        const char *c = dj ? "deep nesting accepted" : (sj ? NULL : "ordinary nesting refused");
+        cJSON_Delete(dj);
+        cJSON_Delete(sj);
+        ESP_LOGI(TAG, "selftest dmlink: %s | idle date: %s | json nesting: %s", a ? a : "ok", b ? b : "ok", c ? c : "ok");
     } else if (strncmp(what, "idle_cfg ", 9) == 0) {
         char *copy = strdup(what + 9);
         if (copy && xTaskCreatePinnedToCore(idle_cfg_task, "idle_cfg", 6144, copy, 2, NULL, 0) != pdPASS) {

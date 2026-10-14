@@ -342,16 +342,42 @@ static void on_frame(const dm_frame_t *f, void *ctx)
     portEXIT_CRITICAL(&u.mux);
 }
 
+/* A hostile stream of valid-looking headers (each claiming 4096 bytes of payload, 12 bytes apart) makes the parser check a 4 KB CRC for every 12
+ * bytes that arrive: more than this core can do, which would starve the poll and tx tasks for as long as the stream lasts. Normal operation has
+ * no CRC failure at all (hundreds of thousands of frames on the bench: 0), so a burst of them is treated as an attack or a broken cable: the
+ * input is thrown away for a short while and parsing starts again from the next byte (the companion's retry logic repeats what was lost). */
+#define RX_BAD_CRC_BURST    40                                      /* CRC failures within RX_BURST_WINDOW_MS ... */
+#define RX_BURST_WINDOW_MS  1000
+#define RX_COOLDOWN_MS      500                                     /* ... make the receiver deaf for this long */
+
 static void rx_task(void *arg)
 {
     (void)arg;
     static uint8_t chunk[1024];
     dm_parser_init(&u.parser);
+    int64_t window_start = 0, cooldown_until = 0;
+    uint32_t window_base = 0;
     for (;;) {
         int n = usb_serial_jtag_read_bytes(chunk, sizeof chunk, pdMS_TO_TICKS(25));
-        const uint32_t t = (uint32_t)now_ms();
+        const int64_t now = now_ms();
+        const uint32_t t = (uint32_t)now;
+        if (cooldown_until) {
+            if (now < cooldown_until) {
+                continue;                                           /* deaf: read and drop */
+            }
+            cooldown_until = 0;
+            window_start = 0;
+        }
         if (n > 0) {
             dm_parser_feed(&u.parser, chunk, (size_t)n, t, on_frame, NULL);
+            if (now - window_start > RX_BURST_WINDOW_MS) {
+                window_start = now;
+                window_base = u.parser.bad_crc;
+            } else if (u.parser.bad_crc - window_base > RX_BAD_CRC_BURST) {
+                ESP_LOGW(TAG, "burst of damaged frames: input ignored for %d ms", RX_COOLDOWN_MS);
+                u.parser.len = 0;
+                cooldown_until = now + RX_COOLDOWN_MS;
+            }
         } else {
             dm_parser_poll(&u.parser, t, on_frame, NULL);
         }
@@ -420,6 +446,11 @@ static int link_vprintf(const char *fmt, va_list ap)
             }
             clean[o++] = line[i];
         }
+#ifndef APP_DEV_TOOLS
+        if (o == 0 || (clean[0] != 'W' && clean[0] != 'E')) {
+            return r;                                        /* product builds mirror warnings and errors only: ordinary lines name the playing track */
+        }
+#endif
         if (o && xRingbufferSend(u.log_rb, clean, o, 0) != pdTRUE) {
             u.st.log_dropped++;
         }

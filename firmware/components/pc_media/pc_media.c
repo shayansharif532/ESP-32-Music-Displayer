@@ -159,16 +159,24 @@ static void jstr(const cJSON *obj, const char *key, char *out, size_t n)
     }
 }
 
+/* A double from a peer converted to an integer: out-of-range conversions are undefined behaviour in C, so the value is clamped first (NaN and
+ * everything <= 0 give 0). */
 static int64_t jint64(const cJSON *obj, const char *key)
 {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
-    return (cJSON_IsNumber(v) && v->valuedouble > 0) ? (int64_t)v->valuedouble : 0;
+    if (!cJSON_IsNumber(v) || !(v->valuedouble > 0)) {
+        return 0;
+    }
+    return v->valuedouble > 9007199254740992.0 ? (int64_t)9007199254740992LL : (int64_t)v->valuedouble;       /* 2^53: where a double stops being exact */
 }
 
 static uint32_t jnum(const cJSON *obj, const char *key)
 {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
-    return (cJSON_IsNumber(v) && v->valuedouble > 0) ? (uint32_t)v->valuedouble : 0;
+    if (!cJSON_IsNumber(v) || !(v->valuedouble > 0)) {
+        return 0;
+    }
+    return v->valuedouble >= 4294967295.0 ? 0xFFFFFFFFU : (uint32_t)v->valuedouble;
 }
 
 static uint8_t jnum8(const cJSON *obj, const char *key)
@@ -863,7 +871,7 @@ static void do_command(const cmd_msg_t *m)
         /* {"ok":true,"volume":65,"muted":false,...} or {"ok":false,"error":"no audio session found for ..."} */
         cJSON *j = (s.resp.status == 200 && s.resp.body.data) ? cJSON_ParseWithLength(s.resp.body.data, s.resp.body.len) : NULL;
         const cJSON *v = j ? cJSON_GetObjectItemCaseSensitive(j, "volume") : NULL;
-        int pct = (j && jbool(j, "ok") && cJSON_IsNumber(v)) ? (int)v->valuedouble : -1;
+        int pct = (j && jbool(j, "ok") && cJSON_IsNumber(v) && v->valuedouble >= 0 && v->valuedouble <= 1000) ? (int)v->valuedouble : -1;
         ESP_LOGI(TAG, "command %s -> volume %d%%%s", path, pct, pct < 0 ? " (unavailable)" : "");
         if (s.cbs.on_volume) {
             s.cbs.on_volume(pct, j ? jbool(j, "muted") : false, s.cbs.ctx);

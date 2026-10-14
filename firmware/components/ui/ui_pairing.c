@@ -158,7 +158,7 @@ static bool ensure_screen(void)
     lv_label_set_text(p.info, "");
 
     lv_obj_t *hint = make_label(scr, &lv_font_montserrat_14, COL_HINT, 426, 420);
-    lv_label_set_text(hint, "Not you? Tap Cancel");
+    lv_label_set_text(hint, "No matching code on your PC? Tap Cancel");
     return true;
 }
 

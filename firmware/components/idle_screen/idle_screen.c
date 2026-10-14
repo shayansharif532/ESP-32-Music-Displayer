@@ -547,8 +547,9 @@ static void commit_theme(uint16_t *new_bg, uint8_t eff)
     update_clock_text();
 }
 
-/* Generate the background outside the LVGL lock, then swap it in. work lock held by the caller. */
-static void rebuild_theme(void)
+/* Generate the background outside the LVGL lock, then swap it in. work lock held by the caller. Returns false when the swap could not be made (the
+ * LVGL lock was not available): then the screen still shows the OLD pictures, which the caller must therefore not free. */
+static bool rebuild_theme(void)
 {
     const uint8_t eff = effective_theme();
     uint16_t *bg = eff == TH_PHOTO ? NULL : make_theme_bg(eff, s.cfg.accent);
@@ -557,10 +558,11 @@ static void rebuild_theme(void)
     }
     if (!bsp_display_lock(2000)) {
         heap_caps_free(bg);
-        return;
+        return false;
     }
     commit_theme(bg, eff);
     bsp_display_unlock();
+    return true;
 }
 
 /* ---- public: screen ------------------------------------------------------------------------------------------- */
@@ -758,7 +760,7 @@ static bool parse_config(const char *json, size_t len, idle_cfg_t *n)
     const cJSON *ver = cJSON_GetObjectItemCaseSensitive(j, "version");
     if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")) && cJSON_IsNumber(ver) && ver->valuedouble >= 1) {
         cfg_defaults(n);
-        n->version = (uint32_t)ver->valuedouble;
+        n->version = ver->valuedouble >= 4294967295.0 ? 0xFFFFFFFFU : (uint32_t)ver->valuedouble;
         const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "theme");
         if (cJSON_IsString(v)) {
             n->theme = !strcmp(v->valuestring, "minimal") ? TH_MINIMAL : !strcmp(v->valuestring, "neon") ? TH_NEON :
@@ -782,7 +784,7 @@ static bool parse_config(const char *json, size_t len, idle_cfg_t *n)
         n->date_fmt = (cJSON_IsNumber(v) && v->valuedouble >= 0 && v->valuedouble < IDLE_DATE_FMT_COUNT) ? (uint8_t)v->valuedouble : IDLE_DATE_FMT_MON_D_Y;
         v = cJSON_GetObjectItemCaseSensitive(j, "delay_s");
         if (cJSON_IsNumber(v)) {
-            n->delay_s = (uint16_t)clampi((int)v->valuedouble, DELAY_MIN_S, DELAY_MAX_S);
+            n->delay_s = (uint16_t)clampi(v->valuedouble > 1000000.0 ? 1000000 : (v->valuedouble < -1000000.0 ? -1000000 : (int)v->valuedouble), DELAY_MIN_S, DELAY_MAX_S);
         }
         v = cJSON_GetObjectItemCaseSensitive(j, "bg_mode");
         n->bg_mode = cJSON_IsString(v) ? (!strcmp(v->valuestring, "fit") ? 1 : !strcmp(v->valuestring, "blur") ? 2 : 0) : 0;
@@ -801,7 +803,7 @@ static bool parse_config(const char *json, size_t len, idle_cfg_t *n)
             const cJSON *sz = cJSON_GetObjectItemCaseSensitive(img, "size"), *crc = cJSON_GetObjectItemCaseSensitive(img, "crc");
             if (cJSON_IsNumber(sz) && cJSON_IsNumber(crc) && sz->valuedouble > 100 && sz->valuedouble <= IMG_MAX_BYTES) {
                 n->img_size = (uint32_t)sz->valuedouble;
-                n->img_crc = (uint32_t)crc->valuedouble;
+                n->img_crc = (crc->valuedouble > 0 && crc->valuedouble < 4294967296.0) ? (uint32_t)crc->valuedouble : 0;
             }
         }
         ok = true;
@@ -811,13 +813,14 @@ static bool parse_config(const char *json, size_t len, idle_cfg_t *n)
 }
 
 /* The new config is final (picture, if any, is in place): remember it and redraw. work lock held. */
-static void finish_apply(const idle_cfg_t *n)
+static bool finish_apply(const idle_cfg_t *n)
 {
     s.cfg = *n;
     nvs_save_cfg(&s.cfg);
-    rebuild_theme();
+    const bool committed = rebuild_theme();
     ESP_LOGI(TAG, "idle settings version %u applied (theme %u, %s clock, date %s/%u, %s)", (unsigned)n->version, (unsigned)n->theme,
              n->show_clock ? (n->clock_24h ? "24h" : "12h") : "no", n->show_date ? "on" : "off", (unsigned)n->date_fmt, n->img_size ? "picture" : "no picture");
+    return committed;
 }
 
 int idle_screen_apply_config(const char *json, size_t len)
@@ -845,8 +848,11 @@ int idle_screen_apply_config(const char *json, size_t len)
                 old = s.photo_px;
                 s.photo_px = NULL;
             }
-            finish_apply(&n);                             /* (a known-undecodable picture is not downloaded again: Dark theme) */
-            heap_caps_free(old);
+            if (finish_apply(&n)) {                       /* (a known-undecodable picture is not downloaded again: Dark theme) */
+                heap_caps_free(old);
+            } else if (old) {
+                ESP_LOGW(TAG, "the screen could not be updated: the old picture buffer is kept (a small leak, never a use after free)");
+            }
             rc = 0;
         }
     }
@@ -881,8 +887,11 @@ bool idle_screen_apply_picture(const uint8_t *jpeg, size_t len)
                 s.photo_px = NULL;
                 s.photo_failed_crc = n.img_crc;
             }
-            finish_apply(&n);
-            heap_caps_free(old);
+            if (finish_apply(&n)) {
+                heap_caps_free(old);
+            } else if (old) {
+                ESP_LOGW(TAG, "the screen could not be updated: the old picture buffer is kept (a small leak, never a use after free)");
+            }
             ok = true;
         }
     }

@@ -283,7 +283,9 @@ esp_err_t pc_art_decode(const uint8_t *jpeg, size_t len, const lv_image_dsc_t **
             break;
         }
     }
-    if (info.output_len > ART_RGB_BYTES) {
+    /* The loop above also ends at the smallest scale when nothing fit: every size the buffers and make_background() assume is re-checked here
+     * (a 65535 x 8 JPEG is only 8192 x 1 at 1/8 scale: it passes the byte count but not the width the background work buffers are sized for). */
+    if (info.width == 0 || info.height == 0 || info.width > ART_MAX_W || info.height > ART_MAX_H || info.output_len > ART_RGB_BYTES) {
         ESP_LOGW(TAG, "image too large: %ux%u", info.width, info.height);
         return ESP_ERR_NO_MEM;
     }
