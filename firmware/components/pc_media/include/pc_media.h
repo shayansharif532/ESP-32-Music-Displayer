@@ -122,7 +122,7 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg);
 
 /* Starts the USB link (and the log mirror to the companion) ahead of pc_media_start(): call it right after NVS is up, before the slow display
  * start, so the companion sees the display about three seconds sooner and the whole boot log reaches it. Idempotent; pc_media_start() calls it too. */
-void pc_media_early_start(void);
+void pc_media_early_start(bool wifi_fallback);   /* wifi_fallback: this build will start Wi-Fi (development / LAN fallback): the SAR-ADC entropy source is then left off */
 
 /* Thread-safe, non-blocking. */
 void pc_media_command(pc_media_cmd_t cmd, uint32_t arg);

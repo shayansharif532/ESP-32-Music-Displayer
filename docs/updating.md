@@ -33,12 +33,12 @@ from a checkout) and a Python with `esptool` (`pip install esptool`). The displa
    blank data, which forgets the pairing and the idle-screen settings):
 
 ```
-python -m esptool --chip esp32s3 -p COM5 -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m ^
+python -m esptool --chip esp32s3 -p COM5 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m ^
     0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 deskmedia_display.bin
 ```
 
-   (replace COM5 with your port; in PowerShell use a backtick instead of `^` or put it on one line; the older underscore spellings
-   `--before default_reset` etc. also work). The board resets by itself when it is done.
+   (replace COM5 with your port; in PowerShell use a backtick instead of `^` or put it on one line; these underscore spellings work in every esptool version,
+   newer ones also accept hyphens and print a hint). The board resets by itself when it is done.
 4. Start the companion again. The display comes up, finds it, and is already paired: the pairing key lives in a flash area (`nvs`, 0x9000) that
    this procedure does not touch. If a release changes the partition table's *layout* the release notes say so and what it costs.
 

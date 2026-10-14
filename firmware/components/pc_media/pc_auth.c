@@ -295,10 +295,13 @@ void pc_auth_random(void *buf, size_t n)
     random_bytes(buf, n);
 }
 
-bool pc_auth_init(void)
+bool pc_auth_init(bool adc_entropy)
 {
     atomic_store(&s_has_key, false);
-    bootloader_random_enable();                             /* keep the SAR-ADC entropy source on: Wi-Fi may never start (docs: Random Number Generation) */
+    if (adc_entropy) {                                      /* no Wi-Fi in this build: the RF subsystem never supplies entropy, so the SAR-ADC source stays on for good. NOT with Wi-Fi: the PHY and the
+                                                             * ADC entropy source share the analog bus (the docs: disable it before RF starts); a Wi-Fi build that left it on hung the USB port */
+        bootloader_random_enable();
+    }
     load_dev_id();
     nvs_handle_t h;
     esp_err_t e = nvs_open(NVS_NS, NVS_READONLY, &h);

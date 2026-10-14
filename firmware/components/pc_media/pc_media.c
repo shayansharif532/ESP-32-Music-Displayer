@@ -1304,14 +1304,14 @@ static void poll_task(void *arg)
 
 /* ---- public ----------------------------------------------------------------------------------------- */
 
-void pc_media_early_start(void)
+void pc_media_early_start(bool wifi_fallback)
 {
     static bool done;
     if (done) {
         return;
     }
     done = true;
-    pc_auth_init();                                     /* the stored pairing key (if any) is read once, here; the display id exists after this */
+    pc_auth_init(!wifi_fallback);                       /* the stored pairing key (if any) is read once, here; the display id exists after this */
     usb_link_config_t uc = { .fw_version = esp_app_get_description()->version, .is_paired = pc_media_is_paired };
     pc_auth_dev_id(uc.dev_id);
     esp_err_t ue = usb_link_start(&uc);
@@ -1336,7 +1336,7 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     if (!s.lock || !s.q || !s.answer_sem) {
         return ESP_ERR_NO_MEM;
     }
-    pc_media_early_start();                             /* normally done long ago (app_main); harmless when it was not */
+    pc_media_early_start(cfg->lan_enabled);             /* normally done long ago (app_main); harmless when it was not */
     s.lan_enabled = cfg->lan_enabled;
     s.boot_ms = now_ms();
     uint8_t cid[8];

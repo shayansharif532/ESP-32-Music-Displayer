@@ -71,7 +71,7 @@ DeskMedia Display firmware - how to flash (details: docs\updating.md)
 2. Find the display's COM port (Device Manager > Ports > "USB Serial Device (COMn)").
 3. Flash the three files SEPARATELY (python -m pip install esptool):
 
-   python -m esptool --chip esp32s3 -p COMn -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 deskmedia_display.bin
+   python -m esptool --chip esp32s3 -p COMn -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 deskmedia_display.bin
 
 Never erase the whole flash: that deletes the pairing and the idle-screen picture.
 Recovery if something goes wrong: hold BOOT while plugging the USB cable in, then flash again.

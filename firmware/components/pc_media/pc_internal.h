@@ -48,7 +48,7 @@ bool pc_hex_decode(const char *hex, size_t hex_len, uint8_t *out, size_t out_len
 bool pc_auth_valid_nonce(const char *s);                                             /* 32 lowercase hex characters */
 bool pc_auth_ct_equal(const void *a, const void *b, size_t n);                       /* constant time */
 
-bool pc_auth_init(void);                        /* once, before the poll task: loads the key + companion id from NVS (malformed entries are erased), creates
+bool pc_auth_init(bool adc_entropy);                        /* once, before the poll task: loads the key + companion id from NVS (malformed entries are erased), creates
                                                  * the display id on first boot and switches the hardware RNG's entropy source on */
 bool pc_auth_dev_id(uint8_t dev[8]);            /* the display's persistent identity (BEACON, pairing) */
 void pc_auth_random(void *buf, size_t n);       /* hardware RNG (true random once pc_auth_init() has run) */
