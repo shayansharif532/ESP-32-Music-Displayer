@@ -23,6 +23,7 @@
 #include "esp_log.h"
 #include "esp_rom_crc.h"
 #include "esp_system.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -35,6 +36,7 @@
 #include "idle_screen.h"
 #include "side_keys.h"
 #include "lvgl.h"
+#include "app_config.h"
 #include "ui.h"
 #include "usb_link.h"
 
@@ -137,6 +139,30 @@ static void pair_shot_task(void *arg)
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(500));                        /* the prompt fades in over 350 ms: let it finish */
     send_screenshot();
+    vTaskDelete(NULL);
+}
+
+/* "link_0" .. "link_6": shows one onboarding screen (ui_link_kind_t, in that order) and photographs it, for reviewing the wording and the layout */
+static void link_shot_task(void *arg)
+{
+    ui_link_show((ui_link_kind_t)(intptr_t)arg, DM_SETUP_URL, DM_SETUP_URL_SHORT, "OFFICE-PC");
+    vTaskDelay(pdMS_TO_TICKS(700));
+    send_screenshot();
+    vTaskDelete(NULL);
+}
+
+/* "usb_detach_<ms>": the display lets go of the USB data lines for that long and re-attaches, which is what unplugging and re-plugging the
+ * cable looks like to the PC (the COM port disappears and comes back; the firmware itself keeps running). For testing the companion's re-detection. */
+static void detach_task(void *arg)
+{
+    const int ms = (int)(intptr_t)arg;
+    ESP_LOGW(TAG, "debug: USB detach for %d ms", ms);
+    vTaskDelay(pdMS_TO_TICKS(150));                         /* the log line leaves first */
+    const usb_serial_jtag_pull_override_vals_t off = { .dp_pu = false, .dp_pd = false, .dm_pu = false, .dm_pd = false };
+    usb_serial_jtag_ll_phy_enable_pull_override(&off);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    usb_serial_jtag_ll_phy_disable_pull_override();
+    ESP_LOGW(TAG, "debug: USB re-attached");
     vTaskDelete(NULL);
 }
 
@@ -258,6 +284,10 @@ void dev_tools_handle(const char *what)
         ESP_LOGW(TAG, "debug reboot");
         vTaskDelay(pdMS_TO_TICKS(150));                          /* the log line leaves first */
         esp_restart();
+    } else if (strncmp(what, "link_", 5) == 0 && what[5] >= '0' && what[5] <= '6' && what[6] == '\0') {
+        xTaskCreatePinnedToCore(link_shot_task, "shot", 6144, (void *)(intptr_t)(what[5] - '0'), 2, NULL, 0);
+    } else if (strncmp(what, "usb_detach_", 11) == 0 && atoi(what + 11) >= 200 && atoi(what + 11) <= 60000) {
+        xTaskCreatePinnedToCore(detach_task, "detach", 4096, (void *)(intptr_t)atoi(what + 11), 2, NULL, 0);
     } else if (strcmp(what, "pair_shot") == 0) {
         xTaskCreatePinnedToCore(pair_shot_task, "shot", 6144, NULL, 2, NULL, 0);
     } else if (strcmp(what, "pair_accept") == 0 || strcmp(what, "pair_cancel") == 0) {

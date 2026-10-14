@@ -58,6 +58,7 @@ class UsbCompanion(it.Companion):
         self._board = board
         self._usb_port = usb_port
         self.runtime = None
+        self.events: list[dict] = []                                # every event of every runtime this companion had (status, pair-request, ...)
         self.base = os.path.dirname(data_dir.rstrip("\\/"))
         board.comp = self
         super().__init__(data_dir, pairing_dir=self.base)
@@ -79,6 +80,7 @@ class UsbCompanion(it.Companion):
         self.pairing = Pairing(PairingStore(self.base))
         self.runtime = AppRuntime(self.monitor, self.store, self.pairing, SettingsStore(self.base), dev_tools=True,
                                   disable_usb=False, usb_port=self._usb_port, log_sink=self._board.feed)
+        self.runtime.add_listener(self.events.append)
         self.runtime.start()
 
     def stop_http(self) -> None:

@@ -17,6 +17,7 @@ The "carousel" phase checks the idle screen as an item of the vertical source ri
 playback command, auto-follow leaves it, swipes up / down from it, horizontal swipes and volume keys do nothing on it.
 """
 import argparse
+import dataclasses
 import datetime as dt
 import io
 import json
@@ -38,9 +39,10 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import fakes  # noqa: E402
 import screenshot as shot  # noqa: E402
 import serial_capture as sc  # noqa: E402
-from PIL import Image, ImageChops, ImageDraw, ImageFont  # noqa: E402
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageStat  # noqa: E402
 
 from desk_media_companion import idle as idle_mod  # noqa: E402
+from desk_media_companion import idle_layout  # noqa: E402
 from desk_media_companion import volume as app_volume  # noqa: E402
 from desk_media_companion.discovery import Beacon  # noqa: E402
 from desk_media_companion.media import MediaMonitor  # noqa: E402
@@ -487,6 +489,136 @@ def phase_modes(board: Board, comp: Companion) -> None:
         check("7  Blur Fill: the foreground is brighter than the blurred surround", lum(fg_l) > lum(corner) + 20)
 
 
+def ink(img: Image.Image, region, thresh: int = 190) -> Image.Image:
+    """The bright (text) pixels inside `region` as a black / white mask."""
+    return img.crop(region).convert("L").point(lambda v: 255 if v >= thresh else 0)
+
+
+def best_overlap(got: Image.Image, ref: Image.Image) -> float:
+    """Intersection over union of two blurred grey images (min / max sums), the best of the +-2 px shifts. The device draws text with LVGL's
+    renderer and the companion's preview with Pillow: the same glyphs differ in anti-aliasing and by a sub-pixel per character, so a hard pixel
+    mask would punish what is no defect, while a blurred comparison still tells one text from another."""
+    got = got.convert("L").filter(ImageFilter.GaussianBlur(1.0))
+    ref = ref.convert("L").filter(ImageFilter.GaussianBlur(1.0))
+    best = 0.0
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            moved = ImageChops.offset(ref, dx, dy)
+            inter = ImageStat.Stat(ImageChops.darker(got, moved)).sum[0]
+            union = ImageStat.Stat(ImageChops.lighter(got, moved)).sum[0]
+            best = max(best, inter / union if union else 0.0)
+    return best
+
+
+def preview_of(settings, when: dt.datetime) -> Image.Image:
+    return idle_mod.render_preview(settings, None, size=480, now=when).convert("RGB")
+
+
+def date_row(settings):
+    """The band of the screen that holds the date line for these settings (from the layout contract), or None when no date is shown."""
+    lay = idle_layout.idle_layout(settings.show_clock, bool(settings.text), settings.show_date)
+    return None if lay.date_cy is None else (20, lay.date_cy - 18, 460, lay.date_cy + 18)
+
+
+def date_matches(img: Image.Image, settings, when: dt.datetime) -> tuple[bool, str]:
+    """The date line on the board's screen against the companion's preview of the same settings, in the row where the layout contract puts it:
+    the ink box agrees within 3 px, and the selected format is the one the screen looks most like of the four formats (so a wrong format,
+    wrong digits, a wrong position or a missing date fail, and renderer differences in anti-aliasing do not)."""
+    row = date_row(settings)
+    if row is None:
+        return False, "these settings show no date"
+    got = ink(img, row)
+    shown = {}
+    for fmt in idle_mod.DATE_FORMATS:
+        s = dataclasses.replace(settings, date_format=fmt)
+        shown[fmt] = best_overlap(img.crop(row), preview_of(s, when).crop(row))
+    ref = ink(preview_of(settings, when), row)
+    gb, rb = got.getbbox(), ref.getbbox()
+    if gb is None or rb is None:
+        return False, f"ink {gb} vs {rb}"
+    if max(abs(a - b) for a, b in zip(gb, rb)) > 3:
+        return False, f"box {gb} vs {rb}"
+    mine = shown[settings.date_format]
+    others = max(v for k, v in shown.items() if k != settings.date_format)
+    detail = f"row y {row[1]}-{row[3]}, box {gb}, match {mine:.2f} (best other format {others:.2f})"
+    return mine >= 0.65 and mine >= others + 0.02, detail
+
+
+def scene_matches(img: Image.Image, settings, when: dt.datetime) -> tuple[bool, str]:
+    """The whole text area (clock, date, custom line) against the preview: every bright shape where the layout contract puts it."""
+    region = (20, 60, 460, 330)
+    best = best_overlap(ink(img, region), ink(preview_of(settings, when), region))
+    return best >= 0.85, f"overlap {best:.2f}"
+
+
+def phase_date(board: Board, comp: Companion) -> None:
+    import desk_media_companion.api as api_mod
+    print("\n== 13. date: formats, hide / show, midnight, after a board reboot and a companion restart")
+    base = dict(theme="dark", accent="#4DA3FF", show_clock=True, clock_24h=True, show_date=True, date_format="mon_d_y", text="")
+    for fmt in ("mon_d_y", "d_mon_y", "mdy", "dmy"):
+        apply_and_wait(board, comp, f"date format {fmt}", **dict(base, date_format=fmt))
+        time.sleep(1.5)
+        img = board.screenshot(comp.monitor, f"idle-date-{fmt}.png")
+        if img is None:
+            check(f"13 {fmt}: screenshot received", False)
+            continue
+        ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now())
+        check(f"13 the date is shown in the format {fmt} and matches the PC's date", ok, detail)
+    apply_and_wait(board, comp, "date hidden", show_date=False)
+    time.sleep(1.5)
+    img = board.screenshot(comp.monitor, "idle-date-hidden.png")
+    ok, detail = scene_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
+    check("13 the hide option removes the date line: the screen is the clock-only layout, as the preview shows it", ok, detail)
+    apply_and_wait(board, comp, "date shown again", show_date=True)
+    time.sleep(1.5)
+    img = board.screenshot(comp.monitor, "idle-date-shown.png")
+    ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
+    check("13 and showing it again brings it back", ok, detail)
+    for theme in ("minimal", "neon"):
+        apply_and_wait(board, comp, f"date on theme {theme}", **dict(base, theme=theme, accent="#FF4FA3" if theme == "neon" else "#4DA3FF", text="Welcome back"))
+        time.sleep(1.5)
+        img = board.screenshot(comp.monitor, f"idle-date-theme-{theme}.png")
+        ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
+        check(f"13 the date is on the {theme} theme (with the custom line below)", ok, detail)
+
+    # midnight: the PC's local clock is faked to 23:59:50 on New Year's Eve; the board counts on by itself and must roll the date over at 00:00:00
+    t0 = time.time()
+    start = dt.datetime(2026, 12, 31, 23, 59, 50)
+    real_clock = api_mod.local_clock_ms
+    api_mod.local_clock_ms = lambda now=None: idle_mod.local_clock_ms(start + dt.timedelta(seconds=time.time() - t0))
+    try:
+        apply_and_wait(board, comp, "midnight test", **dict(base, date_format="mon_d_y", text=""))
+        img = board.screenshot(comp.monitor, "idle-date-before-midnight.png", timeout=30.0)
+        s = comp.store.settings()
+        ok, detail = date_matches(img, s, start + dt.timedelta(seconds=time.time() - t0)) if img is not None else (False, "no screenshot")
+        check("13 just before midnight the board shows Dec 31, 2026", ok, detail)
+        time.sleep(max(0.0, 14.0 - (time.time() - t0)))
+        img = board.screenshot(comp.monitor, "idle-date-after-midnight.png", timeout=30.0)
+        ok, detail = date_matches(img, s, start + dt.timedelta(seconds=time.time() - t0)) if img is not None else (False, "no screenshot")
+        check("13 after midnight, without any reboot or new setting, it shows Jan 1, 2027", ok, detail)
+    finally:
+        api_mod.local_clock_ms = real_clock
+    apply_and_wait(board, comp, "real clock again", text="again")
+    comp.store.update(text="")
+
+    # the board restarts (it has no clock of its own): it takes time and date from the companion again
+    mark = board.mark()
+    board.reset()
+    check("13 after a board reboot the idle screen is back", board.wait(r"app: screen -> idle", mark, 45.0) is not None)
+    time.sleep(5.0)
+    img = board.screenshot(comp.monitor, "idle-date-after-reboot.png")
+    ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
+    check("13 ... and shows the right date", ok, detail)
+    comp.stop_http()
+    time.sleep(1.0)
+    comp.start_http()
+    time.sleep(12.0)
+    img = board.screenshot(comp.monitor, "idle-date-after-companion-restart.png")
+    ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
+    check("13 after a companion restart the date is still right", ok, detail)
+    comp.store.update(show_date=False)                                    # the other phases do not look at the date line
+
+
 def phase_persistence(board: Board, comp: Companion) -> None:
     print("\n== 5. the picture survives a board reboot, without being resent")
     apply_and_wait(board, comp, "mode fill again", bg_mode="fill")
@@ -898,7 +1030,7 @@ def main() -> int:
     ap.add_argument("--skip-soak", action="store_true")
     ap.add_argument("--skip-slow", action="store_true", help="skip the minute-rollover wait")
     ap.add_argument("--ring-cycles", type=int, default=40, help="cycles of the ring soak (swipe onto Idle and back)")
-    ap.add_argument("--only", default="", help="comma separated phases to run: basics,themes,minute,modes,persistence,fallbacks,carousel,peek,ringshots,ringsoak,soak,evidence")
+    ap.add_argument("--only", default="", help="comma separated phases to run: basics,themes,minute,modes,persistence,fallbacks,date,carousel,peek,ringshots,ringsoak,soak,evidence")
     args = ap.parse_args()
 
     if args.transport == "lan":
@@ -923,7 +1055,7 @@ def main() -> int:
         board = Board(port)
         comp = Companion(os.path.join(data_dir, "idle"))
     try:
-        comp.store.update(delay_s=4)
+        comp.store.update(delay_s=4, show_date=False)                    # the date line has its own phase; the others look at the clock only
         only = {x.strip() for x in args.only.split(",") if x.strip()}
         want = lambda name: (not only) or name in only
         if want("basics") or only:
@@ -938,6 +1070,8 @@ def main() -> int:
             phase_persistence(board, comp)
         if want("fallbacks"):
             phase_fallbacks(board, comp)
+        if want("date"):
+            phase_date(board, comp)
         if want("carousel"):
             phase_carousel(board, comp, procs)
         if want("peek"):

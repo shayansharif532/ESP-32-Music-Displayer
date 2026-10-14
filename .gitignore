@@ -118,6 +118,8 @@ companion/version_info.txt
 installer/version.iss
 installer/output/
 installer/build/
+# Firmware packaged for flashing (tools/package_firmware.ps1)
+release/
 
 # --- 9. PERSONAL IDLE-SCREEN CUSTOMISATION (never push) --------------------------------------------------------------
 # The companion keeps a user's idle screen (settings file + chosen picture) in %LOCALAPPDATA%\DeskMediaCompanion\idle, outside the
