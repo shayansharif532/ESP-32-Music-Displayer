@@ -356,6 +356,15 @@ class SessionCase(ApiCase):
 
 
 class Handshake(SessionCase):
+    def test_the_vector_of_the_spec_and_the_firmware(self):
+        """docs/usb-protocol.md section 10 (nd = cc * 16, nc = dd * 16): the firmware's on-target self-test checks the same two proofs."""
+        session = LinkSession(self.pairing, self.clock, rand=lambda n: bytes([0xDD]) * n)
+        opened = session.handle("/link/open", json.dumps({"dev": DEV.hex(), "nd": "cc" * 16}).encode(), DEV)
+        self.assertEqual(body_of(opened)["proof"], "6eb2d91074d29d26f2c752fd75c9577e41516d44a7acbb5ad032686d09cb56dd")
+        auth = session.handle("/link/auth", json.dumps({"dev": DEV.hex(), "proof": "b9e783272a2baef27e9f868e45a9c64d8728c37b081aecb5cc3f7c0c92006c89"}).encode(), DEV)
+        self.assertEqual(auth.status, 200)
+        self.assertTrue(session.authenticated)
+
     def test_the_known_answer_vector(self):
         """The companion's proof and the one it accepts match the HMACs computed with plain hmac / hashlib."""
         status, body = self.open()

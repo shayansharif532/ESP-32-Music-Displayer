@@ -23,7 +23,7 @@ display: it only describes what is playing (title, artist, progress, a cover ima
   second, draws the 480x480 LVGL UI and sends play / pause / next / previous / seek / volume / source-switch commands back.
 * No Spotify account, Client ID, Premium subscription, OAuth, tokens or internet access is involved. Display and companion pair once
   (a six-digit code confirmed on both ends); the pairing is remembered on both sides, every LAN request is signed, and every USB connection
-  proves the key first ([protocol.md](protocol.md), [usb-protocol.md](usb-protocol.md) section 7).
+  proves the key first ([protocol.md](protocol.md), [usb-protocol.md](usb-protocol.md) section 4).
 * No Wi-Fi is needed: the display's firmware has no credentials in the product configuration ([ADR-009](decisions/ADR-009-usb-first-transport.md)).
 
 ```
@@ -138,7 +138,7 @@ Network code never calls LVGL directly except through the thread-safe `ui_*` fun
    (companion's view) and found again by the same mechanism.
 2. **Pairing** (first use, or after "Forget paired display" on the PC): see [protocol.md](protocol.md) section 3. For an unpaired display the
    companion opens the pairing window by itself (and a dialog with the code). Afterwards LAN requests are signed; each USB connection
-   starts with a mutual challenge-response over the pairing key ([usb-protocol.md](usb-protocol.md) section 7).
+   starts with a mutual challenge-response over the pairing key ([usb-protocol.md](usb-protocol.md) section 4).
 3. **Polling.** About once a second `pc_media` requests `GET /now-playing` (~400 B of JSON over a kept-alive connection). The UI interpolates
    the progress bar locally every 250 ms.
 4. **Artwork.** Only when `art_id` changes: `GET /artwork?size=312&maxw=432` returns a ready-made baseline JPEG. The ESP32 decodes it into

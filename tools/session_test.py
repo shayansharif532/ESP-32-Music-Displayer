@@ -24,7 +24,7 @@ import urllib.request
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PY = os.path.join(ROOT, "companion", ".venv", "Scripts", "python.exe")
 FAKE = os.path.join(ROOT, "companion", "tools", "fake_media_session.py")
-COMPANION_LOG = os.path.join(os.environ.get("LOCALAPPDATA", ""), "DeskMediaCompanion", "companion.log")
+COMPANION_LOG = os.path.join(os.environ.get("DESK_MEDIA_DATA_DIR") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "DeskMediaCompanion"), "companion.log")
 ACTION_WAIT_S = 3.4          # a debug action reaches the board with its next poll (<= 1 s), then the gesture itself takes ~1 s
 
 BASE = "http://127.0.0.1:8765"

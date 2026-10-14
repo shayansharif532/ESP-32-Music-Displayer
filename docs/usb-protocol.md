@@ -268,3 +268,15 @@ PONG, id 0, empty payload:
 ```
 
 A stream that contains `fa de 01 30 ...` with one flipped byte, then the vector again, must yield exactly the second frame.
+
+Session proofs (section 4), with the pairing key `K` of the appendix of [protocol.md](protocol.md), `cid` 0102030405060708,
+`dev` 1111111111111111, `nd` = 16 bytes `cc`, `nc` = 16 bytes `dd`:
+
+```
+K     = a388cfc735774ba3e13991eadd90a4ffa2020becaf2d78a70541f26db7a09821
+proof (companion, "DMLINK-PC\n"  || cid || dev || nd || nc) = 6eb2d91074d29d26f2c752fd75c9577e41516d44a7acbb5ad032686d09cb56dd
+proof (display,   "DMLINK-DEV\n" || cid || dev || nd || nc) = b9e783272a2baef27e9f868e45a9c64d8728c37b081aecb5cc3f7c0c92006c89
+```
+
+The firmware checks these (and the frame vectors above) on the target, in development builds (`selftest` action, the log says
+`selftest dmlink: ok`), and `companion/tests/test_framing.py` / `test_api.py` check them on the PC.

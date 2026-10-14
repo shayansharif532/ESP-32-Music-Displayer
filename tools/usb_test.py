@@ -10,8 +10,8 @@ silent fake media sessions.
 
 Checks:  1 the display is found without any port setting and pairs (the pairing window opens by itself), 2 a companion restart reconnects
 without asking for a pairing again, 3 a reboot of the display does too, 4 a simulated unplug / replug of the cable (the display lets go of the
-USB data lines: for the PC this is what pulling the cable looks like) of 1.5 s, 3 s, 9 s and 20 s is recovered by itself, with the same
-pairing, 5 forgetting the pairing on the PC makes the display ask again and the pairing window opens by itself, 6 data keeps flowing
+USB data lines, then restarts as a power-up does: for the PC this is what pulling the cable looks like) of 1.5 s, 3 s, 9 s and 20 s is
+recovered by itself, with the same pairing, 5 forgetting the pairing on the PC makes the display ask again and the pairing window opens by itself, 6 data keeps flowing
 afterwards (poll counters, artwork) and the display never reset except where this test rebooted it.
 """
 import argparse
@@ -51,7 +51,9 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true", help="skip the 20 s detach")
     args = ap.parse_args()
     os.makedirs(LOGS, exist_ok=True)
-    data_dir = tempfile.mkdtemp(prefix="usb-test-")
+    kept = os.environ.get("DM_TEST_DATA_DIR", "")             # keep the pairing between runs (never the real data folder)
+    data_dir = kept or tempfile.mkdtemp(prefix="usb-test-")
+    os.makedirs(data_dir, exist_ok=True)
     procs: dict = {}
     board = uh.UsbBoard()
     comp = uh.UsbCompanion(os.path.join(data_dir, "idle"), board, usb_port="" if args.port == "auto" else args.port)
@@ -96,20 +98,20 @@ def main() -> int:
         check("3 without a pairing prompt", board.count(r"pairing code shown", mark) == 0 and comp.pairing.paired)
         resets0 = board.count(RESET_RX)
 
-        print("\n== 4. the cable is pulled and plugged back in (simulated: the display detaches its USB data lines)")
+        print("\n== 4. the cable is pulled and plugged back in (simulated: the display lets go of the USB data lines, then restarts as a power-up does)")
         for ms in (1500, 3000, 9000) + (() if args.quick else (20000,)):
             mark = board.mark()
-            comp.act(f"usb_detach_{ms}", gap=0.0)
+            comp.act(f"usb_replug_{ms}", gap=0.0)
             went = wait_for(lambda: comp.usb_state() != "connected", 15.0, 0.1)
             t_gone = time.time()
             check(f"4 {ms / 1000:g} s unplugged: the companion notices", went, f"state {comp.usb_state()}")
-            back = wait_for(lambda: comp.usb_state() == "connected", ms / 1000 + 40.0, 0.1)
+            back = wait_for(lambda: comp.usb_state() == "connected", ms / 1000 + 45.0, 0.1)
             results[f"replug_{ms}_back_after_s"] = round(time.time() - t_gone, 1)
             check(f"4 {ms / 1000:g} s unplugged: the link is back by itself, same pairing", back and comp.pairing.paired, f"{results[f'replug_{ms}_back_after_s']} s after it went away")
-            check(f"4 {ms / 1000:g} s unplugged: no pairing prompt, no reset", board.count(r"pairing code shown", mark) == 0 and board.count(RESET_RX, mark) == 0)
+            check(f"4 {ms / 1000:g} s unplugged: no pairing prompt", board.count(r"pairing code shown", mark) == 0)
             check(f"4 {ms / 1000:g} s unplugged: the display is served again", served(comp))
             time.sleep(2.0)
-        check("4 the display itself never reset during the interruptions", board.count(RESET_RX) == resets0)
+        resets0 = board.count(RESET_RX)
 
         print("\n== 5. the pairing is forgotten on the PC: the display asks again, the window opens by itself")
         mark = board.mark()
@@ -147,7 +149,8 @@ def main() -> int:
             for t, ln in board.lines:
                 if not re.match(r"^S\d+ ", ln):
                     f.write(f"{t:.2f} {ln}\n")
-        shutil.rmtree(data_dir, ignore_errors=True)
+        if not kept:
+            shutil.rmtree(data_dir, ignore_errors=True)
     print(f"\n{len(it.failures)} failure(s)" + (": " + "; ".join(it.failures) if it.failures else ""))
     print(json.dumps(results, indent=1))
     with open(os.path.join(LOGS, "usb-test-result.json"), "w", encoding="utf-8") as f:

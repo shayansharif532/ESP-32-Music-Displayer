@@ -551,6 +551,27 @@ def scene_matches(img: Image.Image, settings, when: dt.datetime) -> tuple[bool, 
     return best >= 0.85, f"overlap {best:.2f}"
 
 
+def idle_shot(board: Board, comp: Companion, name: str, timeout: float = 30.0):
+    """A screenshot of the IDLE screen: if something (a media key pressed on this PC, a fake session resuming) has brought the player up, the fakes
+    are paused again and the shot is retaken, so a transient player never counts as a date failure."""
+    img = None
+    for _attempt in range(3):
+        comp.set_state(A, False)
+        comp.set_state(B, False)
+        end = time.time() + 20.0
+        while time.time() < end:
+            events = board.screen_events(0)
+            if events and events[-1][1] == "idle":
+                break
+            time.sleep(0.3)
+        time.sleep(1.0)
+        img = board.screenshot(comp.monitor, name, timeout)
+        events = board.screen_events(0)
+        if img is not None and events and events[-1][1] == "idle":
+            return img
+    return img
+
+
 def phase_date(board: Board, comp: Companion) -> None:
     import desk_media_companion.api as api_mod
     print("\n== 13. date: formats, hide / show, midnight, after a board reboot and a companion restart")
@@ -558,7 +579,7 @@ def phase_date(board: Board, comp: Companion) -> None:
     for fmt in ("mon_d_y", "d_mon_y", "mdy", "dmy"):
         apply_and_wait(board, comp, f"date format {fmt}", **dict(base, date_format=fmt))
         time.sleep(1.5)
-        img = board.screenshot(comp.monitor, f"idle-date-{fmt}.png")
+        img = idle_shot(board, comp, f"idle-date-{fmt}.png")
         if img is None:
             check(f"13 {fmt}: screenshot received", False)
             continue
@@ -566,18 +587,18 @@ def phase_date(board: Board, comp: Companion) -> None:
         check(f"13 the date is shown in the format {fmt} and matches the PC's date", ok, detail)
     apply_and_wait(board, comp, "date hidden", show_date=False)
     time.sleep(1.5)
-    img = board.screenshot(comp.monitor, "idle-date-hidden.png")
+    img = idle_shot(board, comp, "idle-date-hidden.png")
     ok, detail = scene_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
     check("13 the hide option removes the date line: the screen is the clock-only layout, as the preview shows it", ok, detail)
     apply_and_wait(board, comp, "date shown again", show_date=True)
     time.sleep(1.5)
-    img = board.screenshot(comp.monitor, "idle-date-shown.png")
+    img = idle_shot(board, comp, "idle-date-shown.png")
     ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
     check("13 and showing it again brings it back", ok, detail)
     for theme in ("minimal", "neon"):
         apply_and_wait(board, comp, f"date on theme {theme}", **dict(base, theme=theme, accent="#FF4FA3" if theme == "neon" else "#4DA3FF", text="Welcome back"))
         time.sleep(1.5)
-        img = board.screenshot(comp.monitor, f"idle-date-theme-{theme}.png")
+        img = idle_shot(board, comp, f"idle-date-theme-{theme}.png")
         ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
         check(f"13 the date is on the {theme} theme (with the custom line below)", ok, detail)
 
@@ -588,12 +609,12 @@ def phase_date(board: Board, comp: Companion) -> None:
     api_mod.local_clock_ms = lambda now=None: idle_mod.local_clock_ms(start + dt.timedelta(seconds=time.time() - t0))
     try:
         apply_and_wait(board, comp, "midnight test", **dict(base, date_format="mon_d_y", text=""))
-        img = board.screenshot(comp.monitor, "idle-date-before-midnight.png", timeout=30.0)
+        img = idle_shot(board, comp, "idle-date-before-midnight.png", timeout=30.0)
         s = comp.store.settings()
         ok, detail = date_matches(img, s, start + dt.timedelta(seconds=time.time() - t0)) if img is not None else (False, "no screenshot")
         check("13 just before midnight the board shows Dec 31, 2026", ok, detail)
         time.sleep(max(0.0, 14.0 - (time.time() - t0)))
-        img = board.screenshot(comp.monitor, "idle-date-after-midnight.png", timeout=30.0)
+        img = idle_shot(board, comp, "idle-date-after-midnight.png", timeout=30.0)
         ok, detail = date_matches(img, s, start + dt.timedelta(seconds=time.time() - t0)) if img is not None else (False, "no screenshot")
         check("13 after midnight, without any reboot or new setting, it shows Jan 1, 2027", ok, detail)
     finally:
@@ -606,14 +627,14 @@ def phase_date(board: Board, comp: Companion) -> None:
     board.reset()
     check("13 after a board reboot the idle screen is back", board.wait(r"app: screen -> idle", mark, 45.0) is not None)
     time.sleep(5.0)
-    img = board.screenshot(comp.monitor, "idle-date-after-reboot.png")
+    img = idle_shot(board, comp, "idle-date-after-reboot.png")
     ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
     check("13 ... and shows the right date", ok, detail)
     comp.stop_http()
     time.sleep(1.0)
     comp.start_http()
     time.sleep(12.0)
-    img = board.screenshot(comp.monitor, "idle-date-after-companion-restart.png")
+    img = idle_shot(board, comp, "idle-date-after-companion-restart.png")
     ok, detail = date_matches(img, comp.store.settings(), dt.datetime.now()) if img is not None else (False, "no screenshot")
     check("13 after a companion restart the date is still right", ok, detail)
     comp.store.update(show_date=False)                                    # the other phases do not look at the date line
@@ -1041,7 +1062,9 @@ def main() -> int:
         except OSError:
             pass
     os.makedirs(LOGS, exist_ok=True)
-    data_dir = tempfile.mkdtemp(prefix="idle-test-")
+    kept = os.environ.get("DM_TEST_DATA_DIR", "")             # a folder to keep between runs (the pairing key stays in it): never the real data folder
+    data_dir = kept or tempfile.mkdtemp(prefix="idle-test-")
+    os.makedirs(data_dir, exist_ok=True)
     procs: dict = {}
     if args.transport == "usb":
         import usb_harness as uh
@@ -1096,7 +1119,8 @@ def main() -> int:
             for t, ln in board.lines:
                 if not re.match(r"^S\d+ ", ln):
                     f.write(f"{t:.2f} {ln}\n")
-        shutil.rmtree(data_dir, ignore_errors=True)
+        if not kept:
+            shutil.rmtree(data_dir, ignore_errors=True)
     print(f"\n{len(failures)} failure(s)" + (": " + "; ".join(failures) if failures else ""))
     with open(os.path.join(LOGS, "idle-test-result.json"), "w", encoding="utf-8") as f:
         json.dump(results, f, indent=1)

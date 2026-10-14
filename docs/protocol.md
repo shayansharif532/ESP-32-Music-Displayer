@@ -14,7 +14,7 @@ The API has two interchangeable **transports**:
 | HTTP/1.1, plain text | 8765 | now-playing state, artwork, idle-screen settings and the control commands |
 
 On USB the per-request MAC of section 2 is replaced by a session: the cable is point-to-point and carries no other client, so the display
-and the companion prove possession of the pairing key once per connection ([usb-protocol.md](usb-protocol.md) section 7) and the routes that
+and the companion prove possession of the pairing key once per connection ([usb-protocol.md](usb-protocol.md) section 4) and the routes that
 need pairing are then served on that connection. The LAN-only protections of section 2 (private-client check, Host header, `X-Desk-Client`) have no meaning on a cable and are not applied there.
 
 Everything below describes **protocol version 2** (the first version with pairing and request authentication). The reasoning and
