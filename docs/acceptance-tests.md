@@ -15,7 +15,7 @@ last column says; anything else is worth a note in an issue (what you did, what 
 | Versions | `tools/usb_versions_test.py` | an older companion and an older firmware each produce the right "update" screen on the glass; the real versions recover by themselves |
 | Idle screen over USB | `tools/idle_test.py --transport usb` | transitions, themes, 12 h clock, picture persistence across a display reboot and a companion restart, **the date: four formats, hide / show, midnight rollover on the device, correct after reboot and restart** |
 | Setup screens | `link_<n>` development action, `logs/usb/link-sheet.png` | every setup screen fits and reads correctly |
-| The optional LAN transport | `tools/lan_smoke_test.py` | the Wi-Fi build still serves a paired display when USB is not available |
+| The optional LAN transport | `tools/lan_smoke_test.py` | **written but never run to completion**: it should show that a Wi-Fi build still serves a paired display when USB is not available. See "Not re-verified" below |
 | Installer | `tools/installer_smoke_test.py`, `installer_flow_test.py`, `quit_listener_test.py` | per-user install, upgrade, uninstall, autostart value, no personal paths, the exe's `--selftest` with no Python |
 
 ## Physical tests (need a person)
@@ -46,6 +46,15 @@ Do them in this order; each takes a few minutes.
    companion, the date is still right. Midnight: leave it running past 00:00; the date changes by itself.
 8. **The player, by hand.** Swipes, taps, the seek bar, the side buttons (PWR = volume up, BOOT = volume down; never hold PWR longer than about four seconds), source switching, Spotify
    shuffle / repeat, per-app volume: the same checks as before the USB link, now over the cable. *Pass:* nothing feels different.
+
+## Not re-verified: the optional Wi-Fi / LAN mode
+
+**not re-verified after the USB changes.** A development firmware built *with* Wi-Fi credentials was flashed once during this work and the board's USB port stopped answering (the Wi-Fi regression test, `tools/lan_smoke_test.py`, therefore never ran). The suspected cause, a hardware random-number source left on while Wi-Fi starts, is fixed in the code but that fix has not been tested on the board; later the board turned out to be stuck in ROM download mode for an unrelated, hardware-level reason (GPIO0 held low), so the original hang was never cleanly isolated.
+
+What exists: the LAN code (discovery beacon, HTTP server, signed requests, the display's LAN client) is unchanged in design and its companion side is covered by unit tests and the isolated
+end-to-end tests (`auto_follow_test.py`, `idle_source_test.py` run against the HTTP transport). What is missing is a run of a Wi-Fi-enabled firmware on the board after the USB link was added.
+To close the gap: attach the board's second USB-C connector (the serial console), build with `-DAPP_DEV_TOOLS=1` and Wi-Fi credentials (no `-DAPP_NO_WIFI=1`), flash, watch the boot log for the
+Wi-Fi start and the USB link, then run `DM_TEST_DATA_DIR=<folder paired over USB> python tools/lan_smoke_test.py`.
 
 ## Decisions that are the project owner's
 

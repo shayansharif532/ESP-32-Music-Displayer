@@ -206,4 +206,4 @@ Findings and what was done (the reviewer's severities):
 | - | Constant DPAPI entropy; flash readable through USB-Serial/JTAG; unsigned installer; `/DIR=`; mutex squatting; fixed `%TEMP%` result file names; per-link failure limiter resets on reconnect | Info | Documented (limitations 10 and 11), consistent with the threat model |
 
 Not verified: the behaviour of the stack and heap findings on the real board (the fixes remove the conditions; the on-target self-test covers the JSON limit), parser load
-under attack on the target, COM-port access control for other Windows users, a real installer run on a clean machine, and the LAN-mode firmware after these changes.
+under attack on the target, COM-port access control for other Windows users, a real installer run on a clean machine, and the LAN-mode firmware after these changes (a Wi-Fi-enabled development build was never brought up on the board after the USB link was added: see [acceptance-tests.md](acceptance-tests.md)).

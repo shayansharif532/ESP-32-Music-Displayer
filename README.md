@@ -225,7 +225,7 @@ for the byte-level protocols. No credentials of any online service exist anywher
 * **Fonts:** the UI fonts are ASCII Montserrat. Titles with accented letters, CJK, Cyrillic or emoji show missing glyphs until a fallback font is added. The idle screen's custom line is simplified to ASCII on the PC.
 * **USB needs a data cable** between the display and the PC (a charge-only cable is recognised: the display says *No USB data*); the PC must be
   on and the companion running (it starts with Windows).
-* **The optional Wi-Fi / LAN mode is a developer fallback:** Wi-Fi credentials are compile-time configuration (`firmware/secrets.local.h`), there is no
+* **The optional Wi-Fi / LAN mode is a developer fallback and is not re-verified after the USB changes** (see Project status): Wi-Fi credentials are compile-time configuration (`firmware/secrets.local.h`), there is no
   provisioning portal, and the LAN API is authenticated but not encrypted (plain HTTP).
 * **The installer is not code-signed** (Windows SmartScreen asks once), and the *Install DeskMedia Companion* screen's QR code points to a
   project-defined address (`DM_SETUP_URL`) that the person handing out displays has to provide ([docs/installation.md](docs/installation.md)).
@@ -240,7 +240,7 @@ for the byte-level protocols. No credentials of any online service exist anywher
 * The USB link (framed protocol, automatic discovery, session authentication): hardware-tested with the board and the real companion code over the cable, with Wi-Fi switched off:
   discovery without a port setting, pairing once, restart of the companion and reboot of the display reconnect without pairing again,
   the idle screen including the date (four formats, hide, midnight rollover on the device) after reboots and restarts ([docs/acceptance-tests.md](docs/acceptance-tests.md)).
-* The optional Wi-Fi transport: recovery (a deliberately dropped link recovered in about 2 s) and PC re-discovery, tested before the USB link existed and smoke-tested after it.
+* The optional Wi-Fi transport: recovery (a deliberately dropped link recovered in about 2 s) and PC re-discovery were tested before the USB link existed. It is **not re-verified after the USB changes.** See [docs/acceptance-tests.md](docs/acceptance-tests.md).
 * Soak runs without a reset or heap / stack drift: 24 real touches over 941 s; five-minute gesture soaks (about 115-125 scripted actions);
   30 idle <-> playback cycles over 315 s; 40 idle-carousel cycles.
 * Details and evidence: [docs/development-history/](docs/development-history/README.md).

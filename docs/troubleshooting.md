@@ -58,6 +58,9 @@ showed, and the last 50 lines of `companion.log`. Look through them first: the l
 
 ## Wi-Fi / LAN mode (optional, for development)
 
+**Not re-verified after the USB changes** ([acceptance-tests.md](acceptance-tests.md)). If a Wi-Fi-enabled build leaves the display's USB port unresponsive, flash the product build
+(`tools\package_firmware.ps1`) through the BOOT-held download mode ([updating.md](updating.md)), and attach the second USB-C connector to read the console.
+
 Only relevant if the display's firmware was built with Wi-Fi credentials and the companion's LAN mode is on. The display then also looks for the
 companion on the local network (UDP beacon) when the USB link is not available. Typical problems: the PC's firewall profile is *Public* (the
 companion serves only private / loopback / link-local clients), the router isolates Wi-Fi clients from the PC, or two companions listen on the
