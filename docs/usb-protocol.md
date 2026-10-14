@@ -233,9 +233,19 @@ fallback or an established link exists.
 * The cable is a trusted point-to-point link **after pairing**: the session proves both ends hold `K`, a different PC or a different
   display cannot join it, nothing sent is reusable. The link is **not encrypted** and has no per-frame MAC: someone who can tap or
   rewrite the cable can read the (low-value) now-playing data or inject frames. That is out of scope; see [security.md](security.md).
-* Before pairing, only `/hello`, `/health`, `/pair/*` and `/link/*` are served. A program that opens the serial port before the
-  companion can make an unpaired display *show* a pairing prompt but cannot pair it (the tap on the display and the click on the PC
-  are both needed) and cannot control a paired one.
+* Before the session, only `/hello`, `/health`, `/pair/*` and `/link/*` are served. A program that opens the serial port before the
+  companion (or a device presenting the same USB ids) can make a display *show* a pairing prompt: an unpaired one, and also a paired one when
+  the program answers as a companion that has forgotten the pairing (the display cannot tell that from the real thing). Nothing is stored
+  unless the user taps **Pair** on the display, and the prompt says to do that only if the PC shows the same code. The mirror image: a
+  rogue *device* can make the companion open its pairing window (only while nothing is paired); the PC's dialog arms its **Pair** button
+  1.5 s after the code appeared and says to click only when the display in front of the user shows the identical code, and `/pair/offer`
+  must name the display that beacons on that very cable. A user who confirms without comparing the codes can still be tricked into
+  pairing with an impostor: that is the limit of any pairing by comparing a short code.
+* Only one display is served per companion: the first one that beacons. A second display (or a rogue device) is reported but ignored until
+  the first has been silent for 8 s.
+* **Development firmware only:** `DEBUG` frames (screenshots, scripted touches, reboot) are acted on only when the firmware was built with
+  `APP_DEV_TOOLS`, which `tools/package_firmware.ps1` refuses to package. Product builds ignore the type and mirror only warnings and errors
+  of their log (`LOG`), because ordinary lines name the track that is playing.
 * Parsing is bounded on both sides: `LEN` is checked before any buffer is sized, the receive buffers are fixed, responses are checked
   against their announced `total` and per-route limits, JSON bodies are parsed with length-checked parsers and every string is copied into a bounded
   buffer. No frame can make either side write a file, run a command or open a path.

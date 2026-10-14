@@ -293,9 +293,8 @@ class LinkSession:
         if key is None or not p.paired_with(dev) or (beacon_dev and not hmac.compare_digest(beacon_dev, dev)):
             return error_reply(401, "unpaired")     # no key, or this is not the paired display: the display offers to pair again
         with self._lock:
-            self._key, self._dev = None, b""         # a new handshake revokes the old session until it completes
-            self.auth_failed = False
-            nc = self._rand(16)
+            self.auth_failed = False                 # (a live session is NOT revoked here: /link/open needs no proof, so anybody on the cable
+            nc = self._rand(16)                      # could otherwise lock the display out; the session is replaced when /link/auth succeeds)
             self._pending = _Pending(dev, nd, nc, key, self._clock() + self.OPEN_TTL_S)
         proof = hmac.new(key, b"DMLINK-PC\n" + self._cid() + dev + nd + nc, hashlib.sha256).digest()
         return json_reply(200, {"ok": True, "nc": nc.hex(), "proof": proof.hex()})
@@ -349,6 +348,13 @@ class Api:
                 return error_reply(404, "not found")
             return ctx.session.handle(route, body, ctx.dev_id)
         if route.startswith("/pair/"):
+            if ctx.transport == "usb" and route == "/pair/offer" and method == "POST" and ctx.dev_id:
+                try:
+                    named = parse_hex(json.loads(body.decode("utf-8")).get("dev"), 8)
+                except (ValueError, RecursionError, AttributeError, PairingError):
+                    named = None
+                if named is not None and not hmac.compare_digest(named, ctx.dev_id):
+                    return error_reply(400, "bad_request")      # a pairing may only be offered by the display that beacons on this very cable
             return self._pair(method, route, q, body)
         if method == "POST":
             return self._post(route, q)

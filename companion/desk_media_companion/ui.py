@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+import time
 from types import SimpleNamespace
 from typing import Callable, Optional
 
@@ -30,6 +31,7 @@ PREVIEW = 240
 TITLE = "DeskMedia Companion - Idle Screen"
 PAIR_TITLE = "DeskMedia Companion - Pair a display"
 POLL_MS = 300
+PAIR_ARM_S = 1.5             # the Pair button wakes up this long after the code appeared: time to LOOK at the display (a device that is not in front of you cannot show a matching code)
 RESULT_MS = 1500             # how long the dialog shows its result ("Paired" ...) before it closes itself
 
 
@@ -494,7 +496,12 @@ class PairDialog:
             head_var.set(view["headline"])
             detail_var.set(view["detail"])
             code_var.set(view["code"])
-            pair_btn.state(["!disabled"] if view["can_pair"] else ["disabled"])
+            if view["code"]:
+                state.setdefault("code_since", time.monotonic())
+            else:
+                state.pop("code_since", None)
+            armed = view["can_pair"] and time.monotonic() - state.get("code_since", time.monotonic()) >= PAIR_ARM_S
+            pair_btn.state(["!disabled"] if armed else ["disabled"])
             timer_var.set(f"Closes in {snap.get('seconds_left', 0)} s")
             if self._raise.is_set():
                 self._raise.clear()

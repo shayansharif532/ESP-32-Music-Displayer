@@ -454,10 +454,22 @@ class Handshake(SessionCase):
         self.assertEqual(self.session.blocked_for(), 60)
         self.assertFalse(self.session.authenticated)
 
-    def test_a_new_open_revokes_the_session_until_it_completes(self):
+    def test_an_open_alone_does_not_revoke_the_session(self):
+        """/link/open needs no proof: anybody on the cable could otherwise lock the display out. The session is replaced when /link/auth succeeds."""
         self.handshake()
         self.open()
-        self.assertFalse(self.session.authenticated)
+        self.assertTrue(self.session.authenticated)
+        self.assertEqual(self.post("/link/auth", {"dev": DEV.hex(), "proof": "00" * 32})[0], 401)      # a failed second handshake ...
+        self.assertTrue(self.session.authenticated)                                                    # ... does not end the first session either
+
+    def test_a_pairing_may_only_be_offered_by_the_display_that_beacons_on_this_cable(self):
+        self.pairing.open_window()
+        import desk_media_companion.x25519 as x
+        pub = x.x25519(bytes(range(32)), x.BASE_POINT)
+        offer = {"dev": OTHER_DEV.hex(), "pub": pub.hex(), "ce": hashlib.sha256(pub + H("cc" * 16)).hexdigest()}
+        self.assertEqual(self.call("POST", "/pair/offer", usb(False, dev=DEV), json.dumps(offer).encode()).status, 400)
+        offer["dev"] = DEV.hex()
+        self.assertEqual(self.call("POST", "/pair/offer", usb(False, dev=DEV), json.dumps(offer).encode()).status, 200)
 
     def test_forgetting_the_pairing_ends_the_session_at_once(self):
         self.handshake()

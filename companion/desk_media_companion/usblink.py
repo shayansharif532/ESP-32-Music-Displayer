@@ -318,6 +318,7 @@ class _Exchange:
     crc: int
     frames: list
     at: float
+    authed: bool = False         # answered inside an authenticated session: not replayed to a link that has lost its session since
 
 
 class Link:
@@ -647,7 +648,7 @@ class Link:
             if exchange is not None and now - exchange.at > DUP_TTL_S:
                 del self._memory[f.msg_id]
                 exchange = None
-            if exchange is not None and exchange.crc == crc:      # same ID, same bytes: answer again, execute nothing
+            if exchange is not None and exchange.crc == crc and (not exchange.authed or self._session.authenticated):   # same ID, same bytes: answer again, execute nothing
                 self._counters["duplicates_replayed"] += 1
                 self._queue(_Job("replay", f.msg_id, crc, now, self._epoch, frames=exchange.frames), key)
                 return
@@ -723,9 +724,11 @@ class Link:
 
     def _answer(self, job: _Job, now: float) -> list:
         """Run the request and turn the reply into frames; remember the exchange so a retry is replayed, not executed again."""
+        authed = False
         if job.kind == "exec":
             d = self._display
-            ctx = ClientCtx("usb", self._session.authenticated, "usb:" + self.name, d.dev if d else b"",
+            authed = self._session.authenticated
+            ctx = ClientCtx("usb", authed, "usb:" + self.name, d.dev if d else b"",
                             d is None or is_compatible(d.api, d.min_api), self._session)
             try:
                 reply = self._api.handle(job.method, job.target, job.body, ctx)
@@ -739,7 +742,7 @@ class Link:
         except ValueError:                                # a body over 512 KB, or a status that does not fit
             frames = encode_response(job.msg_id, 500, error_reply(500, "response too large").body)
         with self._lock:
-            self._memory[job.msg_id] = _Exchange(job.msg_id, job.crc, frames, now)
+            self._memory[job.msg_id] = _Exchange(job.msg_id, job.crc, frames, now, authed)
             self._memory.move_to_end(job.msg_id)
             while len(self._memory) > DUP_MEMORY:
                 self._memory.popitem(last=False)

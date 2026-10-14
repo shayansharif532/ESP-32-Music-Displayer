@@ -508,6 +508,16 @@ class DuplicateRequests(RigCase):
         self.assertEqual(rig.monitor.control_count, 1)
         self.assertEqual(rig.link.counters()["duplicates_replayed"], 1)
 
+    def test_a_remembered_private_answer_is_not_replayed_after_the_session_ended(self):
+        """Duplicate suppression must not serve now-playing data to a link whose pairing was forgotten in the meantime."""
+        rig = self.connected()
+        first = rig.sim.wait(rig.sim.request_async("GET", "/now-playing", msg_id=500))
+        self.assertEqual(first.status, 200)
+        rig.pairing.forget()                                                               # the session ends at once
+        again = rig.sim.wait(rig.sim.request_async("GET", "/now-playing", msg_id=500))     # same id, same bytes, well inside the memory window
+        self.assertEqual(again.status, 401)
+        self.assertEqual(rig.link.counters().get("duplicates_replayed", 0), 0)
+
     def test_a_display_reboot_forgets_the_memory_so_a_reused_id_is_a_new_request(self):
         rig = self.connected()
         r = rig.sim.post("/control/next")                                                # id 3 of the first life
@@ -637,7 +647,7 @@ class Session(RigCase):
         rig.sim.key = bytes(32)
         with self.assertRaises(ProofError):
             rig.sim.open_session()
-        self.assertFalse(rig.link.authenticated)                                          # the new /link/open revoked the old session
+        self.assertTrue(rig.link.authenticated)                                           # an /link/open alone does not end a live session
 
     def test_a_bad_proof_is_401_and_ten_of_them_block_the_handshake_for_a_minute(self):
         rig = self.make(paired=True)

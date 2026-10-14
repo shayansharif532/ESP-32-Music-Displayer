@@ -1185,6 +1185,9 @@ class PairDialog(unittest.TestCase):
             fake.snap.update(state="revealed", code="123456")
             ui.poll()
             self.assertEqual((ui.head.get(), ui.code.get()), ("Check that the display shows the same code", "123456"))
+            self.assertTrue(ui.pair_button.instate(["disabled"]))               # the code has only just appeared: time to look at the display
+            ui.state["code_since"] -= ui_mod.PAIR_ARM_S + 0.1                   # ... which has now passed
+            ui.poll()
             self.assertTrue(ui.pair_button.instate(["!disabled"]))
             ui.pair_button.invoke()
             self.assertEqual(fake.calls, ["confirm"])

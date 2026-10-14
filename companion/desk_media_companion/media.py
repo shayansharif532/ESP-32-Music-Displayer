@@ -426,8 +426,8 @@ class MediaMonitor:
             if sig != self._last_sig:
                 self._last_sig = sig
                 self._seq += 1
-                log.info("now: [%s] %s - %s (%s) %s", app, title, artist, state,
-                         "art " + self._art_id if self._art_id else "no art yet")
+                log.info("now: [%s] (%s) %s", app, state, "art " + self._art_id if self._art_id else "no art yet")     # no title: a log file is not a listening history
+                log.debug("now: [%s] %s - %s", app, title, artist)
             snap["seq"] = self._seq
             return snap
 
