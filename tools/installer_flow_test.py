@@ -242,6 +242,12 @@ def main() -> int:
             check("D /SKIPMUTEXCHECK overrides the gate (automated tests)", rc == 0, f"exit {rc}")
         finally:
             k.CloseHandle(ctypes.c_void_p(h))
+        k, h = hold_mutex("Local\\DeskMediaCompanion-lan-8765")      # a LAN-only development instance (--no-usb --lan) holds only this one
+        try:
+            rc = sb.run(sb.setup, f'/CURRENTUSER /DIR="{sb.install}" /NOICONS /NOLAUNCH')
+            check("D a LAN-only development instance (Local\\DeskMediaCompanion-lan-<port> only) does not block an install", rc == 0, f"exit {rc}")
+        finally:
+            k.CloseHandle(ctypes.c_void_p(h))
 
         # ---- E. shortcuts -------------------------------------------------------------------------------------------------------
         rc = sb.run(sb.setup, f'/CURRENTUSER /DIR="{sb.install}" /SKIPMUTEXCHECK /NOLAUNCH /TASKS=""')          # no /NOICONS

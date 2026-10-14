@@ -71,10 +71,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 
 ; --- upgrade / running copy -----------------------------------------------------------------------------------------
-; The companion's single-instance mutex is Local\DeskMediaCompanion-<port> today (8765 by default) and is expected to become
-; Local\DeskMediaCompanion; GetAppMutex (below) lists both. InitializeSetup first asks a running companion of this installation
-; to quit, so Setup's "the application is running" check only stops an install when some other copy is running; Setup's
-; Restart Manager step (CloseApplications) is the safety net for files still in use.
+; The companion's single-instance lock is the mutex Local\DeskMediaCompanion (taken by every instance that may use USB; since the
+; USB-first release it does not depend on an HTTP port, and a LAN-only development instance takes only Local\DeskMediaCompanion-lan-<port>,
+; which is deliberately not checked here). InitializeSetup first asks a running companion of this installation to quit
+; (a named event, not HTTP), so Setup's "the application is running" check only stops an install when some other copy is running;
+; Setup's Restart Manager step (CloseApplications) is the safety net for files still in use.
 AppMutex={code:GetAppMutex}
 CloseApplications=yes
 RestartApplications=no
@@ -184,14 +185,15 @@ begin
   Result := not HasSwitch('/NOLAUNCH');
 end;
 
-{ The single-instance mutex names of the companion (see the [Setup] comment). /SKIPMUTEXCHECK switches the check off: it is for
-  automated tests on a machine where some other copy (e.g. a developer's) is running on purpose. }
+{ The single-instance mutex of the companion (see the [Setup] comment; the same name is created by __main__.py as Local\DeskMediaCompanion).
+  /SKIPMUTEXCHECK switches the check off: it is for automated tests on a machine where some other copy (e.g. a developer's) is running
+  on purpose. }
 function GetAppMutex(Param: string): string;
 begin
   if HasSwitch('/SKIPMUTEXCHECK') then
     Result := ''
   else
-    Result := 'DeskMediaCompanion,DeskMediaCompanion-8765';
+    Result := 'DeskMediaCompanion';
 end;
 
 function WantStartMenuIcon: Boolean;
