@@ -126,9 +126,11 @@ def main() -> int:
         scenario(exe, work, env, "1 default (no HTTP port)", [], lan=False)
         scenario(exe, work, env, "2 with --lan", ["--lan", "--bind", "127.0.0.1", "--port", str(LAN_PORT), "--no-discovery"], lan=True)
 
-        log = os.path.join(work, "data", "companion.log")                      # the log lives next to the settings: --data-dir
-        text = open(log, encoding="utf-8", errors="replace").read() if os.path.isfile(log) else ""
-        check("the log says quits were requested", text.count("quit requested") == 2, f"{text.count('quit requested')} entries (log in the sandbox)")
+        import glob
+        text = ""
+        for log in sorted(glob.glob(os.path.join(work, "data-*", "companion.log"))):         # one data folder (and log) per scenario
+            text += open(log, encoding="utf-8", errors="replace").read()
+        check("the log says quits were requested", text.count("quit requested") == 2, f"{text.count('quit requested')} entries (logs in the sandbox)")
         check("neither run needed the hard exit", "did not stop" not in text)
         r = pc.run_exe(exe, ["--quit"], env)
         check("a second --quit is harmless", r.returncode == 0)
