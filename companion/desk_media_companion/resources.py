@@ -1,8 +1,8 @@
 """Data files that ship inside the package (`desk_media_companion/assets/`), found both when running from source and from the
 PyInstaller exe.
 
-The exe is built with `--add-data "desk_media_companion\\assets;desk_media_companion/assets"` (see companion/build.ps1): PyInstaller
-unpacks such data under `sys._MEIPASS`, keeping the folder structure given on the right-hand side.
+The PyInstaller spec (companion/DeskMediaCompanion.spec) puts the assets folder into the exe's folder (under `sys._MEIPASS`), keeping the
+structure.
 """
 from __future__ import annotations
 

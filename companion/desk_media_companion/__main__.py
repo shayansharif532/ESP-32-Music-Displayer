@@ -25,8 +25,9 @@ def _say(message: str) -> None:
         print(message, file=sys.stderr)
 
 
-def _setup_logging(console: bool, debug: bool = False) -> str:
-    base = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "DeskMediaCompanion")
+def _setup_logging(console: bool, debug: bool = False, directory: str = "") -> str:
+    from .pairing import default_data_dir
+    base = directory or default_data_dir()                 # the log lives next to the settings: the tray's "Open log folder" shows both
     os.makedirs(base, exist_ok=True)
     path = os.path.join(base, "companion.log")
     handlers: list[logging.Handler] = [logging.handlers.RotatingFileHandler(path, maxBytes=512_000, backupCount=2, encoding="utf-8")]
@@ -152,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Auto-start removed." if autostart.remove() else "Auto-start was not installed.")
         return 0
 
-    log_path = _setup_logging(console=args.console or args.probe, debug=args.debug)
+    log_path = _setup_logging(console=args.console or args.probe, debug=args.debug, directory=args.data_dir)
     log = logging.getLogger("main")
 
     from .media import MediaMonitor
@@ -188,8 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     use_lan = args.lan or settings.get().lan_enabled
     held = _acquire_instance_locks(not args.no_usb, args.port if use_lan else None)
     if held:
-        log.error("another Desk Media Companion is already running (%s)", held)
-        _say("Another Desk Media Companion is already running.")
+        log.error("another DeskMedia Companion is already running (%s)", held)
+        _say("Another DeskMedia Companion is already running.")
         return 2
 
     from .runtime import AppRuntime
@@ -201,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         if not use_usb:                                  # nothing left to serve the display with: the old behaviour (exit 2)
             runtime.stop()
             return 2
-    log.info("Desk Media Companion %s: USB %s, LAN %s (log: %s)", __version__, "on" if use_usb else "off",
+    log.info("DeskMedia Companion %s: USB %s, LAN %s (log: %s)", __version__, "on" if use_usb else "off",
              f"on, port {args.port}" if runtime.lan_running else "off", log_path)
 
     import threading
@@ -211,8 +212,11 @@ def main(argv: list[str] | None = None) -> int:
     tray = None
     if not args.no_tray:
         from . import ui
+        from .tray import TrayApp
         window = ui.SettingsWindow(store, pairing)
-        tray = ui.start_tray(window, on_quit=runtime.request_quit, pairing=pairing)
+        tray = TrayApp(runtime, window, pairing, on_quit=runtime.request_quit, data_dir=settings.dir)
+        if not tray.start():
+            tray = None
         if args.open_settings:
             window.open()
     try:

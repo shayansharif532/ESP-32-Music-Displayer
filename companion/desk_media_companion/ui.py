@@ -1,5 +1,5 @@
-"""The companion's small user interface: a system-tray icon with "Settings", "Pair a display..." and "Forget paired display", the
-Idle Screen settings window and the pairing dialog.
+"""The companion's windows: the Idle Screen settings window, the pairing dialog and the "Forget paired display" question (the tray icon that
+opens them is tray.py).
 
 No command-line options are needed for any of it. The window edits an `IdleStore` (idle.py); "Apply" stores the settings and the
 display picks them up within a second (it sees the new `idle_v` in its next /now-playing answer). The pairing dialog drives a
@@ -27,8 +27,8 @@ from .pairing import Pairing
 log = logging.getLogger("ui")
 
 PREVIEW = 240
-TITLE = "Desk Media Companion - Idle Screen"
-PAIR_TITLE = "Desk Media Companion - Pair a display"
+TITLE = "DeskMedia Companion - Idle Screen"
+PAIR_TITLE = "DeskMedia Companion - Pair a display"
 POLL_MS = 300
 RESULT_MS = 1500             # how long the dialog shows its result ("Paired" ...) before it closes itself
 
@@ -39,6 +39,34 @@ def _make_dpi_aware() -> None:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
+
+
+def make_icon_image(badge: Optional[tuple[int, int, int]] = None, size: int = 64) -> Image.Image:
+    """The product icon: five equaliser bars on a dark tile; `badge` adds a small status dot in the lower right corner (the tray uses it)."""
+    s = size * 4
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((0, 0, s - 1, s - 1), s // 5, fill=(24, 26, 44, 255))
+    for i, h in enumerate((0.30, 0.55, 0.42, 0.68, 0.36)):            # the default accent colour
+        x = int(s * (0.16 + i * 0.145))
+        d.rounded_rectangle((x, int(s * (0.82 - h)), x + int(s * 0.09), int(s * 0.82)), s // 40, fill=(77, 163, 255, 255))
+    if badge is not None:
+        r = int(s * 0.17)
+        cx, cy = s - r - int(s * 0.04), s - r - int(s * 0.04)
+        d.ellipse((cx - r - s // 32, cy - r - s // 32, cx + r + s // 32, cy + r + s // 32), fill=(24, 26, 44, 255))
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=badge + (255,))
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def apply_window_icon(root) -> None:
+    """The product icon on a Tk window (otherwise Windows shows Tk's feather). Never fails: a window without an icon still works."""
+    try:
+        from PIL import ImageTk
+        photo = ImageTk.PhotoImage(make_icon_image(size=64), master=root)
+        root.iconphoto(True, photo)
+        root._dm_icon = photo                     # Tk keeps no reference of its own
+    except Exception:
+        log.debug("the window icon could not be set")
 
 
 class SettingsWindow:
@@ -73,6 +101,7 @@ class SettingsWindow:
             return
         _make_dpi_aware()
         root = tk.Tk()
+        apply_window_icon(root)
         ui = self.attach(root)
         root.mainloop()
         del ui, root
@@ -412,6 +441,7 @@ class PairDialog:
         _make_dpi_aware()
         self.pairing.open_window()
         root = tk.Tk()
+        apply_window_icon(root)
         self.attach(root)
         root.mainloop()
 
@@ -499,50 +529,3 @@ def forget_with_confirmation(pairing: Pairing) -> None:
         finally:
             root.destroy()
     threading.Thread(target=run, name="forget-ui", daemon=True).start()
-
-
-# ---- tray icon -------------------------------------------------------------------------------------------------------------
-
-def make_tray_icon_image(size: int = 64) -> Image.Image:
-    img = Image.new("RGBA", (size * 4, size * 4), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    s = size * 4
-    d.rounded_rectangle((0, 0, s - 1, s - 1), s // 5, fill=(24, 26, 44, 255))
-    for i, h in enumerate((0.30, 0.55, 0.42, 0.68, 0.36)):            # five "equaliser" bars in the default accent colour
-        x = int(s * (0.16 + i * 0.145))
-        d.rounded_rectangle((x, int(s * (0.82 - h)), x + int(s * 0.09), int(s * 0.82)), s // 40, fill=(77, 163, 255, 255))
-    return img.resize((size, size), Image.LANCZOS)
-
-
-def start_tray(window: SettingsWindow, on_quit: Callable[[], None], pairing: Optional[Pairing] = None):
-    """Puts the companion's icon in the Windows notification area. Returns the pystray icon, or None when pystray is not available."""
-    try:
-        import pystray
-    except ImportError:
-        log.warning("pystray is not installed: no tray icon (pip install pystray). Use --open-settings to open the settings window.")
-        return None
-    from . import autostart
-
-    def toggle_autostart(icon, item) -> None:
-        try:
-            autostart.remove() if autostart.is_installed() else autostart.install()
-        except OSError as exc:
-            log.warning("auto-start change failed: %s", exc)
-
-    def quit_app(icon, item) -> None:
-        icon.stop()
-        on_quit()
-
-    items = [pystray.MenuItem("Settings...", lambda icon, item: window.open(), default=True)]
-    if pairing is not None:
-        dialog = PairDialog(pairing)
-        items += [pystray.MenuItem("Pair a display...", lambda icon, item: dialog.open()),
-                  pystray.MenuItem("Forget paired display", lambda icon, item: forget_with_confirmation(pairing),
-                                   enabled=lambda item: pairing.paired)]
-    items += [pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: autostart.is_installed()),
-              pystray.Menu.SEPARATOR,
-              pystray.MenuItem("Quit Desk Media Companion", quit_app)]
-    menu = pystray.Menu(*items)
-    icon = pystray.Icon("DeskMediaCompanion", make_tray_icon_image(), "Desk Media Companion", menu)
-    icon.run_detached()
-    return icon
