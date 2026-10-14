@@ -1296,6 +1296,26 @@ static void poll_task(void *arg)
 
 /* ---- public ----------------------------------------------------------------------------------------- */
 
+void pc_media_early_start(void)
+{
+    static bool done;
+    if (done) {
+        return;
+    }
+    done = true;
+    pc_auth_init();                                     /* the stored pairing key (if any) is read once, here; the display id exists after this */
+    usb_link_config_t uc = { .fw_version = esp_app_get_description()->version, .is_paired = pc_media_is_paired };
+    pc_auth_dev_id(uc.dev_id);
+    esp_err_t ue = usb_link_start(&uc);
+    if (ue != ESP_OK) {
+        ESP_LOGE(TAG, "USB link could not start: %s", esp_err_to_name(ue));
+    }
+    usb_link_log_install();                             /* the firmware log goes to the companion as well (it keeps a log file for support) */
+#ifdef APP_DEV_TOOLS
+    usb_link_set_debug_handler(usb_debug, NULL);
+#endif
+}
+
 esp_err_t pc_media_start(const pc_media_config_t *cfg)
 {
     if (s.started || !cfg) {
@@ -1308,21 +1328,9 @@ esp_err_t pc_media_start(const pc_media_config_t *cfg)
     if (!s.lock || !s.q || !s.answer_sem) {
         return ESP_ERR_NO_MEM;
     }
-    pc_auth_init();                                     /* the stored pairing key (if any) is read once, here; the display id exists after this */
+    pc_media_early_start();                             /* normally done long ago (app_main); harmless when it was not */
     s.lan_enabled = cfg->lan_enabled;
     s.boot_ms = now_ms();
-    {
-        usb_link_config_t uc = { .fw_version = esp_app_get_description()->version, .is_paired = pc_media_is_paired };
-        pc_auth_dev_id(uc.dev_id);
-        esp_err_t ue = usb_link_start(&uc);
-        if (ue != ESP_OK) {
-            ESP_LOGE(TAG, "USB link could not start: %s", esp_err_to_name(ue));
-        }
-        usb_link_log_install();                         /* the firmware log goes to the companion as well (it keeps a log file for support) */
-#ifdef APP_DEV_TOOLS
-        usb_link_set_debug_handler(usb_debug, NULL);
-#endif
-    }
     uint8_t cid[8];
     if (pc_auth_cid(cid)) {
         memcpy(s.cid, cid, sizeof s.cid);

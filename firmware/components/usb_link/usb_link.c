@@ -327,7 +327,7 @@ static void on_frame(const dm_frame_t *f, void *ctx)
                 ok = ok && c >= 0x20 && c < 0x7F;                    /* printable ASCII only */
                 name[i] = c;
             }
-            name[f->len] = ' ';
+            name[f->len] = '\0';
             if (ok) {
                 u.debug_cb(name, u.debug_ctx);
             }

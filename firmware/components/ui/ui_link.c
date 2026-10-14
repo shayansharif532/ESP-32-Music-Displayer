@@ -135,7 +135,7 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
         usb = ST_WARN;
         title = "No USB data";
         body = "This cable only supplies power, or it is not connected to a PC. Use a USB cable that carries data and plug it into your PC.";
-        hint = "Try another cable or another USB port";
+        hint = "Try another cable, or the display's other USB-C connector";
         break;
     case UI_LINK_USB_CONNECTED:
         comp = ST_CURRENT;
@@ -189,10 +189,14 @@ void ui_link_show(ui_link_kind_t kind, const char *url, const char *url_short, c
     lv_obj_set_style_text_color(k.icon, lv_color_hex(icon_col), 0);
     lv_label_set_text(k.icon, icon);
 
+    /* the QR screens carry the longest titles ("Install DeskMedia Companion"): a smaller font keeps them on one line */
+    lv_obj_set_style_text_font(k.title, qr ? &lv_font_montserrat_24 : &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(k.url, (url_short && strlen(url_short) > 30) ? &lv_font_montserrat_16 : &lv_font_montserrat_20, 0);
+
     if (qr) {                                               /* title, text, the code on a white card, the short address, a hint */
         lv_obj_add_flag(k.icon, LV_OBJ_FLAG_HIDDEN);
         place(k.title, 62);
-        place(k.body, 106);
+        place(k.body, 100);
         lv_obj_align(k.card, LV_ALIGN_TOP_MID, 0, 178);
         lv_obj_remove_flag(k.card, LV_OBJ_FLAG_HIDDEN);
         if (lv_qrcode_update(k.qr, k.url_full, (uint32_t)strlen(k.url_full)) != LV_RESULT_OK) {
