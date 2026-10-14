@@ -237,10 +237,16 @@ for the byte-level protocols. No credentials of any online service exist anywher
 
 * Now-playing display, artwork, progress, play / pause / previous / next / seek, per-application volume, source switching, auto-follow, Spotify
   shuffle / repeat, the idle screen with its themes and picture persistence, and the idle item in the carousel.
-* Wi-Fi recovery (a deliberately dropped link recovered in about 2 s) and PC re-discovery.
+* The USB link (framed protocol, automatic discovery, session authentication): hardware-tested with the board and the real companion code over the cable, with Wi-Fi switched off:
+  discovery without a port setting, pairing once, restart of the companion and reboot of the display reconnect without pairing again,
+  the idle screen including the date (four formats, hide, midnight rollover on the device) after reboots and restarts ([docs/acceptance-tests.md](docs/acceptance-tests.md)).
+* The optional Wi-Fi transport: recovery (a deliberately dropped link recovered in about 2 s) and PC re-discovery, tested before the USB link existed and smoke-tested after it.
 * Soak runs without a reset or heap / stack drift: 24 real touches over 941 s; five-minute gesture soaks (about 115-125 scripted actions);
   30 idle <-> playback cycles over 315 s; 40 idle-carousel cycles.
 * Details and evidence: [docs/development-history/](docs/development-history/README.md).
+
+**Not yet verified by a person:** unplugging and re-plugging the cable with the companion running, a charge-only cable, a PC reboot, the BOOT-held download-mode recovery, the installer's wizard on a clean machine
+(the silent install, upgrade and uninstall paths are tested), and the setup screens and the idle date on the glass: the list with exact steps is [docs/acceptance-tests.md](docs/acceptance-tests.md).
 
 **Known limitations:** see above. In addition, gestures, the side buttons and the idle-screen fades were mostly checked through the board's virtual finger
 and simulated key presses (the same LVGL input path as the touch controller); a physical check of the upper (PWR) side button and of how the idle screen
@@ -249,8 +255,8 @@ looks on the glass was still open in the logs. A short screen flicker while a *n
 **Future work:**
 
 * Full-screen artwork polish (the full-screen cover is the 312 px image enlarged, so it is soft).
-* First-run Wi-Fi provisioning (setup access point and captive page; the reset gesture would be a long press of BOOT while running).
-* Companion installer: a proper installer with a one-click Windows Firewall helper and an update path (the single exe and per-user auto-start already exist).
+* Optional Wi-Fi provisioning for the LAN fallback (over the USB link, or a setup access point); the product no longer needs Wi-Fi.
+* A code-signed installer and a firmware flasher for recipients (today: the installer is unsigned and the firmware is flashed with `esptool`, [docs/updating.md](docs/updating.md)).
 * Fallback fonts for non-ASCII titles.
 * A targeted touch stress soak (top band, screen edges, rapid taps).
 * Optional, not started: a browser extension for high-resolution browser artwork (analysis in [M8c](docs/development-history/M8c-session-switching.md)); an enclosure and stand.
@@ -262,10 +268,11 @@ README.md             this page
 PORTFOLIO.md          short project summary for CVs and portfolios
 CLAUDE.md             orientation for contributors and AI assistants (rules and pitfalls)
 THIRD_PARTY_NOTICES.md, LICENSES/   third-party licences and credits
-companion/            the Windows companion (Python): desk_media_companion/, tests/, tools/, build.ps1
-firmware/             the ESP-IDF project: main/, components/{ui, wifi_mgr, pc_media, idle_screen, side_keys}, partitions.csv
-tools/                idf.ps1, find-board.ps1, serial_capture.py, board-in-the-loop test and screenshot tools
-docs/                 architecture, protocol, security, hardware, development guide, decisions/, development-history/, screenshots/
+companion/            the Windows companion (Python): desk_media_companion/, tests/, tools/ (a simulated display), build.ps1
+firmware/             the ESP-IDF project: main/, components/{ui, usb_link, wifi_mgr, pc_media, idle_screen, side_keys}, partitions.csv
+installer/            the per-user Windows installer (Inno Setup) and its assets
+tools/                idf.ps1, find-board.ps1, build_release.ps1, package_firmware.ps1, board-in-the-loop tests (usb_test.py, idle_test.py, ...)
+docs/                 architecture, protocols, security, hardware, installation, updating, troubleshooting, development guide, decisions/, development-history/, screenshots/
 backup/               where your own factory flash backup goes (*.bin is git-ignored)
 ```
 
@@ -274,11 +281,15 @@ backup/               where your own factory flash backup goes (*.bin is git-ign
 | Document | Content |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System overview, components, data flow, device states, source-selection model, threading, memory, persistence |
-| [docs/protocol.md](docs/protocol.md) | The companion <-> display protocol: beacon, pairing, authenticated requests, HTTP API |
-| [docs/security.md](docs/security.md) | Threat model and security design |
+| [docs/protocol.md](docs/protocol.md) | The API and pairing, authenticated LAN requests, the HTTP transport |
+| [docs/usb-protocol.md](docs/usb-protocol.md) | DMLINK v1: the USB link (frames, presence, session, limits, test vectors) |
+| [docs/security.md](docs/security.md) | Threat model, the USB trust model, the post-change security review |
+| [docs/installation.md](docs/installation.md), [docs/updating.md](docs/updating.md), [docs/troubleshooting.md](docs/troubleshooting.md) | First-time setup and everyday use; updating the companion and the firmware; what each setup screen means and how to recover |
+| [docs/idle-screen.md](docs/idle-screen.md) | The idle screen: clock, date formats, where the time comes from, the layout contract |
+| [docs/acceptance-tests.md](docs/acceptance-tests.md) | What is automated, and the physical tests that need a person |
 | [docs/hardware.md](docs/hardware.md) | The reference board: silicon, peripherals, pin map, side buttons, sources |
 | [docs/development.md](docs/development.md) | Set up a machine, build, flash, run, package, test, troubleshoot |
-| [docs/decisions/](docs/decisions/README.md) | Architecture decision records (ADR-001 ... ADR-008) |
+| [docs/decisions/](docs/decisions/README.md) | Architecture decision records (ADR-001 ... ADR-009; ADR-009 is why the link is USB) |
 | [docs/development-history/](docs/development-history/README.md) | The engineering logs of how the project was built, milestone by milestone |
 | [companion/README.md](companion/README.md) | Companion usage, options, data locations |
 | [docs/licensing.md](docs/licensing.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | Licensing status and third-party notices |
