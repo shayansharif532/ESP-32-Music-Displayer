@@ -7,8 +7,11 @@ anything stale here. The project overview is in [README.md](README.md); the long
 ## What this project is
 
 A standalone ESP32-S3 touchscreen that shows and controls whatever a **Windows PC** is playing. A Windows companion (Python) reads the
-Windows media sessions (GSMTC) and per-application audio sessions (Core Audio) and serves a local protocol (HTTP on 8765, UDP beacon on 8766).
-The ESP32 firmware (ESP-IDF 5.5.5, LVGL 9.5, C) discovers the PC, polls it about once a second, draws the 480x480 UI and sends commands back.
+Windows media sessions (GSMTC) and per-application audio sessions (Core Audio) and serves one API over two transports: the **USB cable** (DMLINK v1
+frames over the board's native USB-Serial/JTAG COM port; the default, no setup, no firewall) and, optionally, HTTP on 8765 with a UDP beacon on 8766.
+The ESP32 firmware (ESP-IDF 5.5.5, LVGL 9.5, C) finds the companion, polls it about once a second, draws the 480x480 UI and sends commands back.
+Wi-Fi is not needed: the product firmware has no credentials. A recipient installs the companion (per-user Inno Setup installer), plugs the display in
+and pairs once ([docs/installation.md](docs/installation.md)).
 The device makes no sound. No Spotify account, OAuth or Premium is used: Spotify desktop, browsers and any app that publishes a Windows
 media session are all just sessions.
 
@@ -23,27 +26,32 @@ the session's app id, never by metadata).
   Never substitute settings from a similar Waveshare board without checking them against this one ([docs/hardware.md](docs/hardware.md)).
 * Toolchain: ESP-IDF **5.5.5** (installed with `eim`), LVGL **9.5.0**, Waveshare BSP 2.0.0, esptool 5.5.0 in `tools/venv`. ESP-IDF, not
   Arduino ([ADR-001](docs/decisions/ADR-001-esp-idf-and-lvgl.md)); do not migrate without a documented reason.
-* Companion: Python 3.12, `winrt-*`, pycaw / comtypes, Pillow, psutil, pystray; packaged with PyInstaller (`companion/build.ps1`).
-* Protocol, pairing and request authentication: [docs/protocol.md](docs/protocol.md); threat model: [docs/security.md](docs/security.md).
+* Companion: Python 3.12, `winrt-*`, pycaw / comtypes, pyserial, Pillow, psutil, pystray; packaged with PyInstaller and installed with Inno Setup
+  (`tools/build_release.ps1`; [installer/README.md](installer/README.md)). Versions: companion `desk_media_companion.__version__`, firmware `PROJECT_VER`
+  (both 1.0.0), DMLINK 1, API 2 ([docs/updating.md](docs/updating.md)).
+* Protocols: the API, pairing and LAN request authentication in [docs/protocol.md](docs/protocol.md); the USB frames, presence and session in
+  [docs/usb-protocol.md](docs/usb-protocol.md); threat model: [docs/security.md](docs/security.md); why USB: [ADR-009](docs/decisions/ADR-009-usb-first-transport.md).
 * Design and diagrams: [docs/architecture.md](docs/architecture.md); decisions: [docs/decisions/](docs/decisions/README.md); build, flash and
   test tools: [docs/development.md](docs/development.md).
 
 ## Repository layout
 
 ```
-companion/        Windows companion: desk_media_companion/ (media.py, sources.py, artwork.py, volume.py, server.py, discovery.py, idle.py, ui.py,
-                  pairing.py, auth.py, ...), tests/, tools/, build.ps1
-firmware/         ESP-IDF project: main/ (glue, dev_tools.c), components/{ui, wifi_mgr, pc_media, idle_screen, side_keys}, partitions.csv, sdkconfig.defaults
-tools/            idf.ps1, find-board.ps1, set-dev-secrets.ps1, serial_capture.py, screenshot.py and the board-in-the-loop tests
-docs/             architecture, protocol, security, hardware, development, decisions/, development-history/, screenshots/
+companion/        Windows companion: desk_media_companion/ (media.py, sources.py, artwork.py, volume.py, api.py, framing.py, usblink.py, runtime.py, config.py,
+                  server.py, discovery.py, idle*.py, ui.py, tray.py, pairing.py, auth.py, ...), tests/, tools/ (display_sim.py: a simulated display), build.ps1
+firmware/         ESP-IDF project: main/ (glue, dev_tools.c), components/{ui, usb_link, wifi_mgr, pc_media, idle_screen, side_keys}, partitions.csv, sdkconfig.defaults
+installer/        Inno Setup script and assets (built by tools/build_release.ps1)
+tools/            idf.ps1, find-board.ps1, build_release.ps1, package_firmware.ps1, usb_harness.py / usb_test.py / idle_test.py and the other board-in-the-loop tests
+docs/             architecture, protocol, usb-protocol, security, hardware, installation, updating, troubleshooting, idle-screen, development, decisions/, development-history/
 backup/           your own factory flash backup goes here (*.bin is git-ignored)
 ```
 
 ## Rules: building and flashing
 
 1. Never assume the serial port or the ESP-IDF location: `tools\find-board.ps1` prints the port, `tools\idf.ps1` finds ESP-IDF.
-2. Before flashing: confirm the target (`esp32s3`) and the device, stop anything holding the port, build successfully first, inspect the
-   partition impact, capture the serial log after the reboot.
+2. Before flashing: confirm the target (`esp32s3`) and the device, stop anything holding the port (**exit the companion**: it keeps the native port
+   open), build successfully first, inspect the partition impact, check the boot afterwards. Flash the three images separately; a merged image would
+   blank `nvs` (the pairing).
 3. Never `erase-flash` casually, never burn eFuses, never change the partition table without documenting the old and new layout
    (the current one is `firmware/partitions.csv`; `nvs` and `factory` offsets are kept so stored data survives a flash).
 4. If flashing fails, do not erase repeatedly: diagnose USB mode, BOOT behaviour, port ownership, esptool output and the boot log. The ROM
@@ -51,11 +59,12 @@ backup/           your own factory flash backup goes here (*.bin is git-ignored)
 5. After editing `firmware/sdkconfig.defaults` run `tools\idf.ps1 set-target esp32s3` (or delete `firmware\sdkconfig`).
 6. **Factory backup:** make a verified full-flash backup of a board before its first flash; never commit it (`*.bin` is git-ignored); keep a
    second copy outside the repository ([docs/development-history/M0-factory-backup.md](docs/development-history/M0-factory-backup.md)).
-7. Never ship a firmware built with `-DAPP_DEV_TOOLS=1`.
+7. Never ship a firmware built with `-DAPP_DEV_TOOLS=1` (`tools/package_firmware.ps1` builds the product image and refuses one that contains the dev tools).
+8. Never release the USB data lines in test code without a system reset afterwards: the port then stays detached until the cable is re-plugged (`usb_replug_<ms>` does it right).
 
 ## Rules: secrets and publication
 
-* Treat the repository as public (it is meant to be published): everything committed, and the whole history, is world-readable.
+* Treat the repository as public even while it is private: everything committed, and the whole history, is world-readable once published. Do not make it public without the owner's say-so.
 * Never commit Wi-Fi credentials, pairing keys, tokens, private keys, factory or flash dumps, logs, `.env` files, or personal data (names,
   addresses, e-mail, device ids, MAC addresses, home network details, absolute personal paths). Use documentation addresses (`192.168.1.50`,
   `192.0.2.x`) and placeholders in docs.
@@ -73,6 +82,8 @@ backup/           your own factory flash backup goes here (*.bin is git-ignored)
   judged from logs or frame-buffer screenshots. Do not claim the screen, touch feel or a physical button is visually / physically correct
   unless a person confirmed it on the real device. Ask the user only for physical checks that cannot be observed from the computer.
 * **Never pin, flash or send commands while someone is using the display by hand**: their swipes and key presses would hit the wrong app.
+* Test companions use a scratch data folder (`--data-dir`, `DM_TEST_DATA_DIR`), never `%LOCALAPPDATA%\DeskMediaCompanion`. The COM port is held by one program at a
+  time: the real companion must be stopped while a test brings its own.
 * `tools/screenshot.py --do ...` actions and test tools that press controls are refused unless the active session is the silent fake test
   session (`companion/tools/fake_media_session.py`); only `swipe_up` / `swipe_down` (selection only) are safe on real sessions.
 * End every test with `POST /control/source-auto`. While developing, run the product companion with `--ignore-apps python.exe,deskfakeb.exe` so
@@ -102,14 +113,18 @@ backup/           your own factory flash backup goes here (*.bin is git-ignored)
 
 * **BOOT** (GPIO0) at power-up is the ROM download-mode gesture, while the app runs it is volume down: a Wi-Fi reset gesture must be a long
   press while running. **PWR** is the AXP2101 power key: never hold it longer than about 4 s (the PMIC powers the board off).
-* The native USB console only streams while the host asserts DTR; `idf.py monitor` needs an interactive terminal, so use
-  `tools/serial_capture.py` (never open the port with both DTR and RTS asserted). The console can drop an occasional log line.
+* The native USB port carries DMLINK frames only (no text may share it); the firmware console is on UART0, the second USB-C connector, and the firmware log is
+  mirrored to the companion as LOG frames. Software that opens the native port keeps DTR and RTS low (an RTS edge resets the chip); a soft reset keeps the port
+  enumerated, a hard reset or unplugging re-enumerates it. `usb_serial_jtag_is_connected()` is true only while the host sends SOF packets, which is how a
+  charge-only cable is told from a data cable. Board facts: [docs/hardware.md](docs/hardware.md).
 * Chromium browsers publish ~150 px thumbnails and Windows cannot give more; browser volume is per browser, not per tab; Firefox cannot be
   matched for volume; a paused browser tab may have no audio session.
 * The UI fonts are ASCII Montserrat: non-ASCII titles render with missing glyphs. LVGL's built-in Montserrat stops at 48 px (the idle clock font is generated by `tools/gen_clock_font.py`).
 * Touch: an early demo build crashed on taps in a top band (7 KB LVGL stack, two draw units, logging inside timers); the cause was never
   proven, so the 24 KB stack, one draw unit and "no logging in LVGL timers" stay ([M1](docs/development-history/M1-lcd-touch.md)).
-* Wi-Fi credentials are compile-time developer configuration; there is no provisioning portal yet.
+* Wi-Fi is optional: credentials are compile-time developer configuration for the LAN fallback; there is no provisioning portal.
+* The setup screens (`ui_link.c`) are checked by `link_<n>` dev actions and the contact sheet in `logs/usb/`; a wrapped title or URL overlaps the text below it.
+* The idle date and clock come from the PC (`clock_ms` in every answer): the display needs no Wi-Fi or SNTP for them ([docs/idle-screen.md](docs/idle-screen.md)).
 * The removed Spotify Web-API client lives in git history (tag `legacy-spotify-web-api`); do not revive it unless asked.
 
 ## Git
