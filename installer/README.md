@@ -5,7 +5,7 @@ How the Windows installer is built, tested, signed and used unattended. For end 
 
 | | |
 |---|---|
-| Result | `installer\output\DeskMediaCompanion-Setup-<version>.exe` (about 17 MB) and a `.sha256` file |
+| Result | `installer\output\DeskMediaCompanion-Setup-<version>.exe` (about 18 MB) and a `.sha256` file; the version comes from `desk_media_companion.__version__` |
 | Installs | the packaged companion (`DeskMediaCompanion.exe` + its runtime) **per user**, to `%LOCALAPPDATA%\Programs\DeskMedia Companion` |
 | Needs | Windows 10 version 1809 (build 17763) or Windows 11, 64-bit (the media-session API of Windows 10 1809 is the floor) |
 | Does not | ask for administrator rights, need a reboot, touch the Windows Firewall, or change any Windows security setting |
@@ -30,7 +30,7 @@ version resource, icon, bundled assets, then `--version` / `--selftest` of the p
 | `-RunTests` | run the unit tests first |
 | `-Clean` | delete `companion\build` and `companion\dist` first |
 | `-Python <exe>` | interpreter used to create the venv when it does not exist |
-| `-ProjectUrl <url>` | home page shown in Programs and Features (default: the `origin` remote on GitHub; `''` = none) |
+| `-ProjectUrl <url>` | home page shown in Programs and Features (default: none; `origin` = the GitHub URL of the origin remote - it contains the owner's account name) |
 | `-SignTool "<command>"` | optional code signing, see [below](#code-signing-optional) |
 
 Where things go (all git-ignored): `companion\dist`, `companion\build`, `companion\version_info.txt`, `installer\version.iss`,
@@ -68,14 +68,15 @@ real `HKCU\...\Run` value `DeskMediaCompanion`, the real `%LOCALAPPDATA%\DeskMed
 ```powershell
 # 1. Clean-machine-style test of the REAL installer: install silently into a throw-away folder, run the installed exe with a
 #    scrubbed environment, look for traces of this PC, uninstall, prove nothing real was touched. Starts nothing that listens.
-companion\.venv\Scripts\python.exe tools\installer_smoke_test.py installer\output\DeskMediaCompanion-Setup-0.1.0.exe
+companion\.venv\Scripts\python.exe tools\installer_smoke_test.py installer\output\DeskMediaCompanion-Setup-1.0.0.exe
 
 # 2. Lifecycle test of the installer SCRIPT in a sandbox variant (other AppId / Run value / data folder, a stand-in app):
 #    install, upgrade, auto-start handling, running-copy gate, shortcuts, uninstall keep / delete data.
 companion\.venv\Scripts\python.exe tools\installer_flow_test.py
 
-# 3. Does a running packaged companion obey `--quit` (what the installer uses for upgrades)? Starts the real exe on 127.0.0.1:8799
-#    only (no tray, no beacon, not port 8765, private data folder).
+# 3. Does a running packaged companion obey `--quit` (what the installer uses for upgrades and uninstalling)? Starts the real exe with
+#    --no-usb (no serial port is touched), --no-tray, a private data folder and quit event; first with NO network port at all (the
+#    default of the USB-first product), then with --lan on 127.0.0.1:8799 (never 8765).
 companion\.venv\Scripts\python.exe tools\quit_listener_test.py
 ```
 
@@ -106,15 +107,20 @@ and `--version` writes `%TEMP%\deskmedia-version.txt` (no message box: a dialog 
 * **Uninstall** (Settings > Apps, or `unins000.exe`): quits the companion, removes the files, the shortcuts and the auto-start entry (also one
   switched on from the tray menu later, but only if it points at this installation). It asks whether to also delete the settings and the pairing
   in `%LOCALAPPDATA%\DeskMediaCompanion`; **the default is No (keep)**. Silent uninstall keeps them unless `/DELETEDATA` is passed.
-* **Running-copy check:** Setup refuses to continue while another copy of the companion is running (its single-instance mutex
-  `Local\DeskMediaCompanion-8765` today, `Local\DeskMediaCompanion` once the mutex is no longer port-specific; both are checked). A copy of
-  *this* installation is quit automatically first, so in practice the check only stops an install when some other copy (for example a
-  developer's) is running.
+* **Running-copy check:** Setup refuses to continue while another copy of the companion is running: the companion's single-instance
+  lock is the mutex `Local\DeskMediaCompanion` (taken by every instance that may use USB; it does not depend on any HTTP port - the
+  product has none unless the optional LAN mode is on, and a LAN-only development instance takes only `Local\DeskMediaCompanion-lan-<port>`,
+  which does not block an install). A copy of *this* installation is quit automatically first, so in practice the check only stops an
+  install when some other copy (for example a developer's) is running. The quit request is a named kernel event
+  (`Local\DeskMediaCompanion-Quit`), not HTTP; `quit_listener_test.py` proves it works with no network port.
+* **Network and firewall:** the installer never touches the Windows Firewall or any other system setting, and in USB mode (the default) the
+  companion opens no listening socket, so Windows has no reason to show a firewall question. Only the optional LAN mode (`--lan` or the
+  `lan_enabled` setting) opens a TCP port and a UDP beacon, and Windows may then ask.
 
 ### Silent install and uninstall
 
 ```powershell
-DeskMediaCompanion-Setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR="D:\Apps\DeskMedia Companion" /TASKS="autostart,!desktopicon" /LOG="%TEMP%\dm-setup.log"
+DeskMediaCompanion-Setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR="D:\Apps\DeskMedia Companion" /TASKS="autostart,!desktopicon" /LOG="%TEMP%\dm-setup.log"
 "%LOCALAPPDATA%\Programs\DeskMedia Companion\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART [/DELETEDATA]
 ```
 
@@ -169,6 +175,25 @@ certificate, a signing service, or free signing programmes for open-source proje
 This defines the `signtool` command for Inno Setup (`/Ssigntool=...`) and turns on `SignTool=signtool` + `SignedUninstaller=yes` in the script;
 the installer, the uninstaller and `DeskMediaCompanion.exe` are signed. Quote carefully (Inno Setup uses `$q` for a double quote inside the
 command, `$p` for a percent sign) and keep the certificate and its password out of the repository.
+
+## The recipient's first run (what the installer is for)
+
+Run Setup (three clicks on Next, a few seconds) -> the companion starts and sits next to the clock -> plug the display into a USB port ->
+the display tells how far it has got (*USB - Companion - Paired*): if it shows **Install DeskMedia Companion** the companion is not
+running on that PC (install it, or start it from the Start menu); if it shows **Pair with your PC**, compare the six-digit codes and confirm
+once on both ends -> done. Every later day: plug in, nothing to do (the companion starts with Windows). The wording for non-developers is in
+[../docs/installation.md](../docs/installation.md).
+
+## Decisions that belong to the project owner
+
+| Decision | State now |
+|---|---|
+| Code signing certificate | none: unsigned build, SmartScreen "Unknown publisher" (above). Signing is optional and supported by the build |
+| Where the installer is downloaded from | the display's *Install DeskMedia Companion* screen (QR code + address) points at `DM_SETUP_URL` in `firmware/main/app_config.h` (default: the GitHub releases page). That page must offer `DeskMediaCompanion-Setup-<version>.exe` and be reachable by the recipient, or the firmware must be built with another `-DDM_SETUP_URL` |
+| Project URL in *Programs and Features* | none by default (`-ProjectUrl`): a GitHub URL contains the owner's account name |
+| Publisher text | `DeskMedia Display project` (installer, uninstall entry, exe version resource) - change in `tools/release_meta.py` and `installer/DeskMediaCompanion.iss` |
+| Project licence | none yet, so Setup shows the third-party notices as information instead of a licence page; when a `LICENSE` file exists, switch `InfoBeforeFile` to `LicenseFile` |
+| Third-party notices | `THIRD_PARTY_NOTICES.md` section 3 must list everything inside the exe: **pyserial** (BSD-3-Clause) is bundled now but only appears in the development-tools section |
 
 ## Troubleshooting
 

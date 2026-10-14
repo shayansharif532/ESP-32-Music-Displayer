@@ -133,7 +133,7 @@ All options and the data locations are in [../companion/README.md](../companion/
 ## Package the companion and build the Windows installer
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1     # -> installer\output\DeskMediaCompanion-Setup-<version>.exe (about 17 MB)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_release.ps1     # -> installer\output\DeskMediaCompanion-Setup-<version>.exe (about 18 MB)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\companion\build.ps1         # only the app folder: companion\dist\DeskMediaCompanion\DeskMediaCompanion.exe
 ```
 

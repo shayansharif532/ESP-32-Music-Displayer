@@ -1,56 +1,66 @@
 # Installing DeskMedia Companion on your PC
 
-> Draft for the final README: written for people who have never used a developer tool. No screenshots yet.
-> Wording that depends on the USB link is marked **[check]** and should be confirmed once that part is final.
-
 DeskMedia Companion is the small program that runs on your Windows PC and tells the DeskMedia display what is playing (Spotify, YouTube
-in your browser, VLC, ...). You install it once; after that it starts by itself.
+in your browser, VLC, ...). The display is connected with a **USB cable**; you install the program once, pair the display once, and after
+that there is nothing to do.
 
-You need: a PC with **Windows 10 (version 1809 or newer) or Windows 11**, 64-bit, the DeskMedia display and a USB cable that carries data
-(some thin cables are charge-only and will not work).
+You need: a PC with **Windows 10 (version 1809 or newer) or Windows 11**, 64-bit; the DeskMedia display; and a USB cable that carries
+data (some thin cables are charge-only and will not work). You do **not** need Python, any other program, an administrator account or a
+network connection for the display.
 
 ## First-time setup
 
-1. **Run the installer.** Double-click `DeskMediaCompanion-Setup-<version>.exe`. You do not need to be an administrator, and you do not
-   need Python or anything else installed.
-2. **If Windows says "Windows protected your PC"**, click **More info**, then **Run anyway**. This happens because the installer does
-   not carry a paid publisher signature yet; it does not mean anything is wrong with it.
-3. **Click Next** on the welcome page and on the page that lists the open-source software the program uses.
-4. On the **Options** page keep *Start DeskMedia Companion when I sign in to Windows* ticked (that is what makes it "just work" every
-   day) and click **Next**. The installation takes a few seconds.
-5. Click **Finish**. A small icon appears in the notification area at the bottom right, next to the clock (it may hide under the **^**
-   arrow). That is DeskMedia Companion running.
-6. **Plug the display into a USB port of this PC.** It is detected automatically; no driver needs to be installed. **[check]**
-7. **The first time only, pair them:** the display and the PC both show a six-digit code. If the two codes are the same, confirm on the
-   display and click **Pair** on the PC. (If the PC window did not open by itself, right-click the tray icon and choose
-   **Pair a display...**.)
-8. Play something. The title, artist and cover appear on the display.
+1. **Run the installer.** Double-click `DeskMediaCompanion-Setup-<version>.exe`. It installs just for you (no administrator password).
+2. **If Windows says "Windows protected your PC"**, click **More info**, then **Run anyway**. This appears because the installer does
+   not carry a paid publisher signature (yet); it does not mean anything is wrong with it.
+3. **Click Next** on the welcome page and on the page that lists the open-source software the program contains. On the **Options** page
+   keep *Start DeskMedia Companion when I sign in to Windows* ticked (that is what makes everything "just work" every day) and click
+   **Next**. Installing takes a few seconds.
+4. **Click Finish** (leave *Start DeskMedia Companion now* ticked). A small icon appears in the notification area at the bottom right,
+   next to the clock (it may hide under the **^** arrow). That is DeskMedia Companion running.
+5. **Plug the display into a USB port of this PC.** It is detected automatically; Windows' own driver is used, nothing needs to be installed
+   for it. The display tells you how far it has got (the strip at its top shows *USB - Companion - Paired*):
+   * **"USB connected - Looking for DeskMedia Companion on your PC..."**: wait a moment.
+   * **"No USB data"**: this cable only supplies power, or it is not plugged into a PC. Use a data cable or another USB port.
+   * **"Install DeskMedia Companion"** (with a QR code and an address): the display cannot find the program on this PC. If you have not
+     installed it yet, do steps 1 to 4. If you have, start **DeskMedia Companion** from the Start menu and check that its icon is next to the clock.
+   * **"Pair with your PC"**: see the next step.
+6. **Pair the display and the PC, once.** The display and the PC both show a six-digit code. Make sure the two codes are the same, then
+   confirm on the display and click **Pair** in the window on the PC. If no window appeared on the PC, right-click the icon next to the
+   clock and choose **Pair a display...**.
+7. **That is it.** Play something; the title, artist and cover appear on the display, and its buttons control the player on the PC.
 
-Windows may ask once whether DeskMedia Companion is allowed to communicate on your network. **[check: only if the program still opens a
-network port by default]** Choose **Allow** if you also want to use the display over Wi-Fi; the USB connection does not need it.
+If you chose not to use the USB cable: the optional network (LAN) mode is switched on in the companion's settings; USB is the normal way.
+In USB mode the program opens no network port, so **Windows does not show a firewall question**.
 
 ## Everyday use
 
-* **There is nothing to start.** The companion starts when you sign in to Windows and the display connects when it is plugged in. Unplug
-  and plug it back in whenever you like.
-* **The tray icon** (notification area, next to the clock). Right-click it for:
-  * **Settings...**: the idle screen (what the display shows when nothing is playing): theme, clock, your own picture.
-  * **Pair a display...** and **Forget paired display**: pair a display (once), or remove the pairing.
-  * **Start with Windows**: tick or untick whether it starts when you sign in.
-  * **Quit**: stop the companion (the display then shows that it cannot find your PC). Start it again from the Start menu:
-    *DeskMedia Companion*.
-* **Updating.** Run the newer installer; it replaces the old version. Your settings and the pairing are kept.
+* **Plug in, nothing else.** The companion starts when you sign in to Windows and the display connects as soon as it is plugged in. Unplug
+  it and plug it back in whenever you like; no pairing is needed again.
+* **The icon next to the clock.** Right-click it for the menu: **Settings...** (the idle screen: what the display shows when nothing is
+  playing - theme, clock, date, your own picture), **Pair a display...**, **Forget paired display**, **Start with Windows**, **Quit**.
+  After **Quit** the display says it cannot find the program; start it again from the Start menu (*DeskMedia Companion*).
+* **Updating.** Run the newer installer; it replaces the old version and keeps your settings and the pairing. A running copy is closed for you.
 * **Uninstalling.** Windows **Settings > Apps > Installed apps > DeskMedia Companion > Uninstall**. Setup then asks whether to delete your
-  settings and the pairing as well; the answer **No** (the default) keeps them, so a reinstall picks up where you left off.
+  settings and the pairing as well. The default answer, **No**, keeps them, so a later reinstall continues where you left off.
 
 ## If something does not work
 
 | What you see | What to try |
 |---|---|
-| No icon next to the clock | Open the Start menu and start *DeskMedia Companion*; check the **^** arrow for hidden icons |
-| The display does not find the PC | Is the companion running (tray icon)? Try another USB port and another data cable; unplug and replug the display. **[check]** |
-| The display wants to pair again | Open **Pair a display...** in the tray menu and confirm the codes |
+| No icon next to the clock | Start *DeskMedia Companion* from the Start menu; look under the **^** arrow for hidden icons |
+| The display shows "Install DeskMedia Companion" although it is installed | The program is not running: start it from the Start menu and look for its icon next to the clock |
+| The display shows "No USB data" | Another cable (a data cable) or another USB port |
+| The display shows "Pair again" | Open **Pair a display...** in the icon's menu and compare the codes |
+| The display says "Update DeskMedia Companion" | Install the newer Setup on the PC (it keeps your settings and the pairing) |
+| The display says "Update the display" | The PC program is newer than the display's own software: follow the project's firmware update instructions |
 | Windows blocked the installer | Click **More info > Run anyway** (see step 2) |
-| Still stuck | The program writes a log to `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (paste that path into the File Explorer address bar). It lists what happened, track titles included |
+| Still stuck | The program writes a log to `%LOCALAPPDATA%\DeskMediaCompanion\companion.log` (paste that into the File Explorer address bar). It lists what happened, and also the titles of what was playing |
 
-For administrators and for building the installer yourself (silent install, signing, tests) see [../installer/README.md](../installer/README.md).
+## For whoever hands a display to somebody else
+
+The display's *Install DeskMedia Companion* screen shows a QR code and a short address. The firmware's default points at the project's
+GitHub releases page (`DM_SETUP_URL` in `firmware/main/app_config.h`); that page must offer `DeskMediaCompanion-Setup-<version>.exe` and be
+reachable by the person you give the display to. To use another place, build the firmware with
+`idf.py -DDM_SETUP_URL=https://example.org/setup -DDM_SETUP_URL_SHORT=example.org/setup build`.
+Silent installs, signing and the packaging tests are described in [../installer/README.md](../installer/README.md).
