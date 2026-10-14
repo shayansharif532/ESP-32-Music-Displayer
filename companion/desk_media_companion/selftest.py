@@ -221,14 +221,12 @@ def check_pystray() -> dict[str, Any]:
         raise RuntimeError(f"pystray picked the wrong backend: {pystray.Icon.__module__}")
     menu = pystray.Menu(pystray.MenuItem("x", lambda icon, item: None), pystray.Menu.SEPARATOR)
     pystray.Icon("selftest", Image.new("RGBA", (16, 16), (0, 0, 0, 255)), "selftest", menu)          # not run: no window, no tray icon
-    from . import ui                                # imports the UI module (tkinter / Pillow only: no window)
-    make_image = getattr(ui, "make_tray_icon_image", None)
-    if make_image is None:
-        return {"detail": "backend pystray._win32 (the UI module has no tray image function to try)"}
-    tray = make_image()
-    if tray.width < 16 or tray.width != tray.height:
+    from . import tray as tray_mod, ui              # the tray and UI modules (tkinter / Pillow only: no window is opened)
+    from PIL import ImageTk                         # the windows' icon: needs PIL._tkinter_finder in a frozen build
+    image = ui.make_icon_image(tray_mod.badge_colour({"state": "connected"}))
+    if image.width < 16 or image.width != image.height:
         raise RuntimeError("the tray icon image has the wrong size")
-    return {"detail": "backend pystray._win32, tray icon image generated"}
+    return {"detail": "backend pystray._win32, tray icon image with a status badge generated, PIL.ImageTk importable"}
 
 
 def check_tkinter() -> dict[str, Any]:
