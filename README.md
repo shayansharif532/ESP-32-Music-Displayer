@@ -33,6 +33,10 @@ images and the two sources are silent mock sessions; nothing here comes from a r
 | ![The companion's idle screen settings window](docs/screenshots/idle-settings-window.png) | ![The pairing prompt](docs/screenshots/pairing-prompt.png) |
 | *The companion's tray Settings window, with a live preview* | *Pairing: the display and the PC show the same six-digit code; confirm on both* |
 
+<p align="center"><img src="docs/screenshots/setup-screens.jpg" alt="The seven setup screens of the display: No USB data, USB connected, Install DeskMedia Companion with a QR code, Pair with your PC, Pair again, Update DeskMedia Companion, Update the display" width="720"></p>
+
+*What the display says before it is connected (a step strip at the top shows USB - Companion - Paired): charge-only cable, looking for the companion, install it (QR code and address), pair, pair again, and the two "update" cases. They disappear by themselves once the link works.*
+
 ## Features
 
 * **480x480 capacitive touch UI** on a 4-inch RGB panel, drawn with LVGL.
